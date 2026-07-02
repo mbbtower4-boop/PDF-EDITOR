@@ -2,10 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:;" />
-  <title>Paperweight — PDF Editor</title>
-  <link rel="icon" href="../assets/paperweight.ico" />
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob: data:; font-src 'self';" />
+  <meta name="app-version" content="1.8.0" />
+  <meta name="theme-color" content="#12151b" />
+  <title>Paperweight — online PDF editor</title>
+  <link rel="icon" href="assets/paperweight.ico" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -14,6 +17,7 @@
     <div class="brand">
       <span class="brand-mark" aria-hidden="true"></span>
       <span class="brand-name">Paperweight</span>
+      <span class="brand-web">web</span>
     </div>
 
     <div class="tbgroup file-group">
@@ -102,13 +106,13 @@
         <div class="empty-card">
           <span class="empty-mark" aria-hidden="true"></span>
           <h1>Open a PDF to get started</h1>
-          <p>View it, mark it up, add text, fill its form, sign it, and reshape its pages — all on your own machine.</p>
+          <p>View it, mark it up, add text, fill its form, sign it, and reshape its pages — all right here in your browser.</p>
           <div class="empty-cta">
             <button id="btnOpen2" class="tbtn primary">Open a PDF</button>
           </div>
           <div class="privacy-chip">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
-            Your files never leave your computer — no accounts, no network.
+            Your files never leave your device — everything happens in this browser tab.
           </div>
         </div>
       </div>
@@ -162,8 +166,8 @@
             <li><b>Pages</b> — drag thumbnails to reorder, or use a thumbnail's <b>⇅</b> to jump it to any page number. Each has rotate &amp; delete.</li>
             <li><b>Insert PDF</b> adds other PDFs at the beginning, end, or after a chosen page. <b>Extract</b> saves a page range.</li>
           </ul>
-          <h3>Good to know</h3>
-          <p class="small muted">This tool <b>adds</b> text as overlays — it does not rewrite text already inside the PDF. "Sign" places a visible signature image; it is not a cryptographic digital signature.</p>
+          <h3>Private by design</h3>
+          <p class="small muted">Your PDFs are opened, edited, and saved entirely in this browser — nothing is ever uploaded. This tool <b>adds</b> text as overlays; it does not rewrite text already inside the PDF. "Sign" places a visible signature image, not a cryptographic digital signature.</p>
         </div>
       </div>
     </aside>
@@ -235,10 +239,11 @@
   <div id="toast" class="toast" hidden></div>
   <div id="busy" class="busy" hidden><div class="spinner"></div><span id="busyMsg">Working…</span></div>
 
-  <!-- Libraries (vendored, offline) ----------------------------------- -->
-  <script src="../vendor/pdf-lib/pdf-lib.min.js"></script>
-  <script src="../vendor/pdfjs/pdf.min.js"></script>
+  <!-- Libraries (vendored, served locally) ---------------------------- -->
+  <script src="vendor/pdf-lib/pdf-lib.min.js"></script>
+  <script src="vendor/pdfjs/pdf.min.js"></script>
   <script src="pdfOps.js"></script>
+  <script src="web-api.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

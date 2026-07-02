@@ -1,5 +1,10 @@
 # Paperweight — Changelog
 
+## v1.8.0 — 2026-07-02
+- **Paperweight now runs in the browser.** A full web build lives in `docs/` and is published via GitHub Pages, so anyone can use the editor from a URL — no install. Every PDF is opened, edited, and saved entirely in the browser; nothing is uploaded. File open uses a normal picker; save uses the File System Access API (Chrome/Edge, save-in-place) with a plain download fallback (Safari/Firefox). The desktop Electron build still shares the same engine and UI.
+- **Refreshed, more professional UI** across both builds: icon-labelled tool ribbon, cleaner toolbar with primary Open/Save, a document canvas that makes the page pop, polished panels, tabs, modals, empty state, and a privacy note.
+- **Fixed form-field detection in the packaged app.** Field types were resolved via `constructor.name`, which the minified/vendored pdf-lib mangles — so every field read as "unknown" and the Form panel stayed empty (this only affected the shipped app; the Node tests use the unminified module and passed). Detection now uses minification-proof `instanceof` checks, with the name check kept as a fallback.
+
 ## v1.7.3 — 2026-07-02
 - **App icon added** (`assets/paperweight.ico`) — an on-brand multi-resolution Windows icon (orange square, dog-eared page, highlighter stroke). Used by the desktop shortcut launcher. Note: a plain `.bat` file can't carry a custom icon in Windows; a `.lnk` shortcut is used for that.
 

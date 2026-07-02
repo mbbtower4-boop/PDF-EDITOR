@@ -1,12 +1,25 @@
 # Paperweight — a local PDF editor
 
-A fully offline desktop app (Electron) to **view, annotate, add text, fill forms,
-sign, and reshape pages** of PDFs. No accounts, no network — your files never
-leave your machine.
+**View, annotate, add text, fill forms, sign, and reshape pages** of PDFs — with
+no accounts and no uploads. Your files never leave your device. Available two ways:
+a **web app** (open a link) and a **desktop app** (Electron).
 
 ---
 
-## Run it
+## Use it online
+
+**→ https://mbbtower4-boop.github.io/PDF-EDITOR/**
+
+Just open the link — nothing to install. The PDF is opened, edited, and saved
+entirely in your browser; it is never uploaded anywhere. Works in any modern
+browser; Chrome/Edge can save changes back to a file in place, while Safari/Firefox
+download the edited copy.
+
+The web build is the static site in [`docs/`](docs/), published via GitHub Pages.
+
+---
+
+## Run the desktop app
 
 You need [Node.js](https://nodejs.org) (which includes npm) installed.
 
