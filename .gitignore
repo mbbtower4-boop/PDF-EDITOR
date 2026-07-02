@@ -1,6 +1,3 @@
 node_modules/
 dist/
 *.log
-
-# Nested repo the user created separately — not part of this app tree
-PDF-EDITOR/
