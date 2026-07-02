@@ -1,5 +1,8 @@
 # Paperweight — Changelog
 
+## v1.7.3 — 2026-07-02
+- **App icon added** (`assets/paperweight.ico`) — an on-brand multi-resolution Windows icon (orange square, dog-eared page, highlighter stroke). Used by the desktop shortcut launcher. Note: a plain `.bat` file can't carry a custom icon in Windows; a `.lnk` shortcut is used for that.
+
 ## v1.7.2 — 2026-07-02
 - **Pen strokes keep their full width.** Each stroke's SVG was clipping at its bounding box, so the outer half of the line got cut off wherever the stroke reached the box edge — making the line look like it thinned or "shrank" in places. The stroke now renders past the box, so width is uniform end to end.
 
