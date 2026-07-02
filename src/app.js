@@ -1136,7 +1136,10 @@ function renderAnnObjects() {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('width', '100%'); svg.setAttribute('height', '100%');
     svg.setAttribute('viewBox', '0 0 ' + wpx + ' ' + hpx);
-    svg.style.display = 'block'; svg.style.pointerEvents = 'none';
+    // The stroke centerline reaches the box edges, so half its width sits outside
+    // the SVG viewport. Without this it gets clipped and the line looks thinner
+    // (or missing) along the edges of the stroke.
+    svg.style.display = 'block'; svg.style.pointerEvents = 'none'; svg.style.overflow = 'visible';
     const sx = wpx / (k.w || 1), sy = hpx / (k.h || 1);
     const pl = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
     pl.setAttribute('points', k.points.map((p) => (p.dx * sx).toFixed(1) + ',' + ((k.h - p.dy) * sy).toFixed(1)).join(' '));

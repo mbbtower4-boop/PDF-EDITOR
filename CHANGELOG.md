@@ -1,5 +1,8 @@
 # Paperweight — Changelog
 
+## v1.7.2 — 2026-07-02
+- **Pen strokes keep their full width.** Each stroke's SVG was clipping at its bounding box, so the outer half of the line got cut off wherever the stroke reached the box edge — making the line look like it thinned or "shrank" in places. The stroke now renders past the box, so width is uniform end to end.
+
 ## v1.7.1 — 2026-07-02
 - **Pen follows your stroke faithfully.** Freehand now captures the browser's buffered ("coalesced") in-between points, so fast strokes no longer cut corners or space unevenly — the recorded line tracks what your hand actually drew.
 - **More colors, plus any custom color.** Highlight, Pen, and Text each got a wider preset palette and a rainbow chip that opens a full color picker for any color you want.
