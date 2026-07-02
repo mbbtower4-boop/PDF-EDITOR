@@ -1,0 +1,18 @@
+{
+  "name": "paperweight-pdf-editor",
+  "version": "1.7.0",
+  "description": "A local, offline desktop PDF editor: view, annotate, add text, fill forms, sign, and reshape pages.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/ops.test.js"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^31.0.0"
+  },
+  "dependencies": {
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "3.11.174"
+  }
+}

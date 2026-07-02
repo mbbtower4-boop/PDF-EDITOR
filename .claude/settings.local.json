@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Recurse D:\\\\Work\\\\paperweight-pdf-editor\\\\src, D:\\\\Work\\\\paperweight-pdf-editor\\\\vendor, D:\\\\Work\\\\paperweight-pdf-editor\\\\test | Select-Object FullName | ForEach-Object { $_.FullName.Replace\\('D:\\\\Work\\\\paperweight-pdf-editor\\\\',''\\) })",
+      "PowerShell(node --version)",
+      "PowerShell(npm --version)",
+      "PowerShell(npm test)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'Initial commit: Paperweight PDF editor v1.7.0 as built in chat *)"
+    ]
+  }
+}

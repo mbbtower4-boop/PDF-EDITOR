@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:;" />
+  <title>Paperweight — PDF Editor</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Top toolbar -------------------------------------------------------- -->
+  <header class="toolbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">Paperweight</span>
+    </div>
+
+    <div class="tbgroup file-group">
+      <button id="btnOpen" class="tbtn" title="Open a PDF (Ctrl+O)">Open</button>
+      <button id="btnSave" class="tbtn primary" title="Save a copy (Ctrl+S)" disabled>Save a copy</button>
+    </div>
+
+    <div class="tbsep"></div>
+
+    <div class="tbgroup tools" role="toolbar" aria-label="Editing tools">
+      <button class="tool" data-tool="hand" title="Pan / select">Hand</button>
+      <button class="tool" data-tool="highlight" title="Highlight a region">Highlight</button>
+      <button class="tool" data-tool="pen" title="Freehand pen">Pen</button>
+      <button class="tool" data-tool="text" title="Add a text box">Text</button>
+      <button class="tool" data-tool="image" title="Insert a JPG/PNG picture">Image</button>
+      <button class="tool" data-tool="sign" title="Place a signature">Sign</button>
+    </div>
+
+    <div class="tbsep"></div>
+
+    <div class="tbgroup page-ops">
+      <button id="btnMerge" class="tbtn" title="Insert other PDFs at a chosen position" disabled>Insert PDF…</button>
+      <button id="btnSplit" class="tbtn" title="Export a page range" disabled>Extract pages…</button>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="tbgroup zoom">
+      <button id="btnZoomOut" class="tbtn icon" title="Zoom out" disabled>−</button>
+      <input id="zoomInput" class="zoom-input" type="text" inputmode="numeric" value="100" title="Zoom % — type a number (30–300) and press Enter" disabled /><span class="muted">%</span>
+      <button id="btnZoomIn" class="tbtn icon" title="Zoom in" disabled>+</button>
+    </div>
+    <button id="btnUndo" class="tbtn" title="Undo (Ctrl+Z)" disabled>Undo</button>
+  </header>
+
+  <!-- Tool options strip (contextual) ----------------------------------- -->
+  <div id="toolOptions" class="tool-options" hidden></div>
+
+  <main class="workspace">
+    <!-- Left: page thumbnails ----------------------------------------- -->
+    <aside class="rail" id="rail" aria-label="Pages">
+      <div class="rail-head">
+        <span>Pages</span>
+        <span id="pageCount" class="muted"></span>
+      </div>
+      <div id="thumbs" class="thumbs"></div>
+      <p class="rail-hint muted">Drag to reorder. Use a thumbnail's menu to rotate or delete.</p>
+    </aside>
+
+    <!-- Center: the document ------------------------------------------ -->
+    <section class="canvas-area" id="canvasArea">
+      <div id="emptyState" class="empty-state">
+        <div class="empty-card">
+          <span class="empty-mark" aria-hidden="true"></span>
+          <h1>No document open</h1>
+          <p>Open a PDF to view it, mark it up, fill its form, and reshape its pages.</p>
+          <button id="btnOpen2" class="tbtn primary">Open a PDF</button>
+        </div>
+      </div>
+
+      <div id="stage" class="stage" hidden>
+        <div class="page-wrap" id="pageWrap">
+          <canvas id="pageCanvas" class="page-canvas"></canvas>
+          <canvas id="overlayCanvas" class="overlay-canvas"></canvas>
+          <div id="annLayer" class="img-layer"></div>
+          <div id="imgLayer" class="img-layer"></div>
+          <div id="txtLayer" class="img-layer"></div>
+          <div id="textLayer" class="text-layer"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right: contextual panel (form fields, signature) -------------- -->
+    <aside class="panel" id="panel" aria-label="Properties">
+      <div class="panel-tabs">
+        <button class="ptab active" data-tab="form">Form</button>
+        <button class="ptab" data-tab="extract">Extract</button>
+        <button class="ptab" data-tab="about">Guide</button>
+      </div>
+      <div class="panel-body">
+        <div class="ptab-pane active" data-pane="form">
+          <div id="formEmpty" class="muted small">Open a PDF to see any fillable form fields here.</div>
+          <div id="formFields" class="form-fields"></div>
+          <div id="formActions" class="form-actions" hidden>
+            <label class="chk"><input type="checkbox" id="flattenChk" /> Flatten (make values permanent, remove fields)</label>
+            <button id="btnApplyForm" class="tbtn primary full">Apply form values</button>
+          </div>
+        </div>
+        <div class="ptab-pane" data-pane="extract">
+          <h3>Text</h3>
+          <p class="small muted">With the Hand tool you can also select text directly on the page and copy with Ctrl+C.</p>
+          <div class="extract-actions">
+            <button id="btnCopyText" class="tbtn full">Copy this page's text</button>
+            <button id="btnSaveText" class="tbtn full">Save all text (.txt)…</button>
+          </div>
+          <h3>Images on this page</h3>
+          <button id="btnScanImgs" class="tbtn full">Scan this page for images</button>
+          <div id="extractImgs" class="extract-imgs"></div>
+        </div>
+        <div class="ptab-pane" data-pane="about">
+          <h3>Quick guide</h3>
+          <ul class="guide">
+            <li><b>Highlight / Pen</b> — drag on the page. With the <b>Hand</b> tool, click a highlight or stroke to select it: drag to move, ✕ or Delete to erase, corners resize a highlight. Everything bakes into the PDF when you save.</li>
+            <li><b>Text</b> — click, type, then Enter. With the <b>Hand</b> tool you can drag it to move, drag a corner to resize, or double-click to re-edit the words. Delete key removes it. Text bakes into the PDF on save.</li>
+            <li><b>Image</b> — <b>drag an image file straight onto the page</b>, or use the Image tool and drag a box. With the <b>Hand</b> tool you can then drag the picture to move it, or drag its corners to resize. Delete key removes a selected picture. Pictures bake into the PDF when you save.</li>
+            <li><b>Sign</b> — draw a signature once, then click on the page to place it.</li>
+            <li><b>Pages</b> — drag thumbnails to reorder, or use a thumbnail's <b>⇅</b> to jump it to any page number. Each has rotate &amp; delete.</li>
+            <li><b>Insert PDF</b> adds other PDFs at the beginning, end, or after a chosen page. <b>Extract</b> saves a page range.</li>
+            <li><b>Jump</b> — type a page number in the bar at the bottom and press Enter.</li>
+            <li><b>Extract</b> — select text right on the page (Hand tool) and Ctrl+C, or use the Extract tab to copy/save text and pull out embedded images (reuse them on the page or save as PNG).</li>
+          </ul>
+          <h3>Good to know</h3>
+          <p class="small muted">This tool <b>adds</b> text as overlays — it does not rewrite text already inside the PDF. "Sign" places a visible signature image; it is not a cryptographic digital signature.</p>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Status bar -------------------------------------------------------- -->
+  <footer class="statusbar">
+    <span id="appVersion" class="muted"></span>
+    <span id="docName" class="muted">—</span>
+    <span class="spacer"></span>
+    <span class="goto"><input id="gotoPage" class="goto-input" type="text" inputmode="numeric" disabled /> <span id="pageTotal" class="muted"></span></span>
+    <span id="toolStatus" class="muted"></span>
+  </footer>
+
+  <!-- Signature capture modal ------------------------------------------ -->
+  <div id="sigModal" class="modal" hidden>
+    <div class="modal-card">
+      <h2>Draw your signature</h2>
+      <canvas id="sigPad" class="sig-pad" width="520" height="200"></canvas>
+      <div class="modal-actions">
+        <button id="sigClear" class="tbtn">Clear</button>
+        <span class="spacer"></span>
+        <button id="sigCancel" class="tbtn">Cancel</button>
+        <button id="sigUse" class="tbtn primary">Use signature</button>
+      </div>
+      <p class="small muted">After saving, click on the page where it should appear.</p>
+    </div>
+  </div>
+
+  <!-- Extract range modal ---------------------------------------------- -->
+  <div id="rangeModal" class="modal" hidden>
+    <div class="modal-card">
+      <h2>Extract pages</h2>
+      <p class="small muted">Pages to keep, e.g. <code>1-3, 5, 8-10</code>. Order is preserved.</p>
+      <input id="rangeInput" class="text-input" type="text" placeholder="1-3, 5" />
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button id="rangeCancel" class="tbtn">Cancel</button>
+        <button id="rangeGo" class="tbtn primary">Save selection…</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Insert PDF position modal --------------------------------------- -->
+  <div id="insertModal" class="modal" hidden>
+    <div class="modal-card">
+      <h2>Insert PDF pages</h2>
+      <p class="small muted">Where should the inserted pages go?</p>
+      <div class="radio-list">
+        <label class="radio"><input type="radio" name="insertPos" value="start" /> At the beginning</label>
+        <label class="radio"><input type="radio" name="insertPos" value="after" checked /> After page <input id="insertAfter" class="num-input" type="text" inputmode="numeric" value="1" /></label>
+        <label class="radio"><input type="radio" name="insertPos" value="end" /> At the end</label>
+      </div>
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button id="insertCancel" class="tbtn">Cancel</button>
+        <button id="insertGo" class="tbtn primary">Choose PDF(s) &amp; insert…</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="dropHint" class="drop-hint" hidden>
+    <div class="drop-hint-card">
+      <span class="drop-hint-icon">＋</span>
+      <span>Drop an image to place it on this page</span>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <div id="busy" class="busy" hidden><div class="spinner"></div><span id="busyMsg">Working…</span></div>
+
+  <!-- Libraries (vendored, offline) ----------------------------------- -->
+  <script src="../vendor/pdf-lib/pdf-lib.min.js"></script>
+  <script src="../vendor/pdfjs/pdf.min.js"></script>
+  <script src="pdfOps.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
