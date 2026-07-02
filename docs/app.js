@@ -187,8 +187,29 @@ async function computeFitScale() {
 }
 
 // ---- Page render ----------------------------------------------------------
+// pdf.js cannot run two render() calls on the same canvas at once — overlapping
+// renders (e.g. from fast Ctrl+wheel zooming) draw the page garbled or
+// seemingly rotated. So only ONE render runs at a time: a request that arrives
+// mid-render is remembered and coalesced into a single trailing re-render with
+// the latest zoom/page, once the current one finishes.
+let rendering = false;
+let pendingRender = false;
 async function renderPage() {
   if (!state.pdfDoc) return;
+  if (rendering) { pendingRender = true; return; } // fold into the in-flight render
+  rendering = true;
+  try {
+    do {
+      pendingRender = false;
+      await drawPage();
+    } while (pendingRender && state.pdfDoc);
+  } catch (e) {
+    console.error('render', e);
+  } finally {
+    rendering = false;
+  }
+}
+async function drawPage() {
   const page = await state.pdfDoc.getPage(state.pageIndex + 1);
   const dpr = window.devicePixelRatio || 1;
   const viewport = page.getViewport({ scale: state.scale });
@@ -207,6 +228,8 @@ async function renderPage() {
   c.style.height = ch + 'px';
   const ctx = c.getContext('2d');
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // Only one render at a time (guarded by `rendering`), so nothing else is
+  // drawing to this canvas while this render runs.
   await page.render({
     canvasContext: ctx,
     viewport,
@@ -606,10 +629,35 @@ function overlayXY(e) {
 }
 function octx() { return els.overlay.getContext('2d'); }
 
+// Drag-to-pan: scroll the canvas area while the pointer is held down.
+// Used by the Hand tool (left button) and by the right mouse button on any tool.
+function startPan(e) {
+  const area = els.canvasArea;
+  const sx = e.clientX, sy = e.clientY;
+  const sl = area.scrollLeft, st = area.scrollTop;
+  document.body.classList.add('panning');
+  const onMove = (ev) => {
+    area.scrollLeft = sl - (ev.clientX - sx);
+    area.scrollTop  = st - (ev.clientY - sy);
+  };
+  const onUp = () => {
+    document.body.classList.remove('panning');
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+  };
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
+}
+
 els.overlay.addEventListener('pointerdown', (e) => {
   if (!state.pdfDoc) return;
+  if (e.button !== 0) return; // right/middle button pans (see canvas-area handler), never draws
   const p = overlayXY(e);
-  if (state.tool === 'hand') { if (state.selectedImageId || state.selectedTextId || state.selectedAnnId) deselectAll(); return; }
+  if (state.tool === 'hand') {
+    if (state.selectedImageId || state.selectedTextId || state.selectedAnnId) deselectAll();
+    startPan(e); // grab the page and drag to move the view
+    return;
+  }
   if (state.tool === 'highlight') { drawing = true; startPt = p; els.overlay.setPointerCapture(e.pointerId); }
   else if (state.tool === 'pen') { drawing = true; penPts = [p]; els.overlay.setPointerCapture(e.pointerId); }
   else if (state.tool === 'image') { if (!state.pendingImage) { pickImage(); return; } drawing = true; startPt = p; els.overlay.setPointerCapture(e.pointerId); }
@@ -1476,6 +1524,17 @@ els.canvasArea.addEventListener('wheel', (e) => {
   e.preventDefault();
   zoom(e.deltaY < 0 ? 0.1 : -0.1);
 }, { passive: false });
+
+// Hold the right mouse button to pan the view — works with every tool, so you
+// can move around mid-annotation without switching to the Hand tool.
+els.canvasArea.addEventListener('pointerdown', (e) => {
+  if (e.button !== 2 || !state.pdfDoc) return;
+  e.preventDefault();
+  startPan(e);
+});
+els.canvasArea.addEventListener('contextmenu', (e) => {
+  if (state.pdfDoc) e.preventDefault(); // right button is the pan gesture here
+});
 
 // ---- Extraction: selectable text layer -------------------------------------
 let textLayerTask = null;

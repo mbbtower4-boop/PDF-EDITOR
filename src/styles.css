@@ -270,7 +270,9 @@ body {
 .tool-text .overlay-canvas { cursor: text; }
 .tool-highlight .overlay-canvas, .tool-pen .overlay-canvas, .tool-image .overlay-canvas { cursor: crosshair; }
 .tool-sign .overlay-canvas { cursor: copy; }
-.tool-hand .overlay-canvas { cursor: default; }
+.tool-hand .overlay-canvas, .tool-hand .stage { cursor: grab; }
+/* While panning (Hand drag or right-button drag) the hand closes. */
+body.panning, body.panning * { cursor: grabbing !important; }
 
 .float-input {
   position: absolute; pointer-events: auto;

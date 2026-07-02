@@ -1,5 +1,10 @@
 # Paperweight — Changelog
 
+## v1.9.0 — 2026-07-02
+- **Real hand cursor + drag-to-pan.** The Hand tool now shows an open-hand cursor that closes while you drag the page to move the view. You can also pan with the **right mouse button under any tool** (the context menu over the document is suppressed), so you can move around mid-annotation.
+- **Fixed Ctrl+wheel zoom garbling/"rotating" the page.** Fast zooming started overlapping pdf.js render() calls on the same canvas — their competing transforms drew the page skewed or seemingly rotated. The active render is now cancelled before a new one starts.
+- Right/middle mouse buttons can no longer accidentally start a pen stroke, highlight, or text box.
+
 ## v1.8.0 — 2026-07-02
 - **Paperweight now runs in the browser.** A full web build lives in `docs/` and is published via GitHub Pages, so anyone can use the editor from a URL — no install. Every PDF is opened, edited, and saved entirely in the browser; nothing is uploaded. File open uses a normal picker; save uses the File System Access API (Chrome/Edge, save-in-place) with a plain download fallback (Safari/Firefox). The desktop Electron build still shares the same engine and UI.
 - **Refreshed, more professional UI** across both builds: icon-labelled tool ribbon, cleaner toolbar with primary Open/Save, a document canvas that makes the page pop, polished panels, tabs, modals, empty state, and a privacy note.
