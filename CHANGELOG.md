@@ -1,5 +1,10 @@
 # Paperweight — Changelog
 
+## v1.7.1 — 2026-07-02
+- **Pen follows your stroke faithfully.** Freehand now captures the browser's buffered ("coalesced") in-between points, so fast strokes no longer cut corners or space unevenly — the recorded line tracks what your hand actually drew.
+- **More colors, plus any custom color.** Highlight, Pen, and Text each got a wider preset palette and a rainbow chip that opens a full color picker for any color you want.
+- **Re-edit text with the Text tool.** Clicking existing words with the Text tool now re-opens them for editing instead of dropping a new box on top. (Double-click with the Hand tool still works too.)
+
 ## v1.7.0 — 2026-07-02
 - **Highlights and pen strokes are now erasable** (and movable): they stay live objects until you save. With the Hand tool, click one to select — drag to move, ✕ or Delete key to erase, corner handles resize highlights. Undo (Ctrl+Z) covers all of it. Text already worked this way. Note: annotations already baked into previously saved files are permanent page content and cannot be lifted out.
 - **Type-in zoom**: the zoom percentage in the toolbar is now an input — type a number (30–300) and press Enter.

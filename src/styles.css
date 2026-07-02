@@ -110,6 +110,11 @@ body {
 .swatches { display: flex; gap: 6px; }
 .swatch { width: 20px; height: 20px; border-radius: 4px; cursor: pointer; border: 2px solid transparent; }
 .swatch.active { border-color: var(--ink); }
+/* Custom-color swatch: a rainbow chip that holds a hidden native color picker. */
+.swatch-custom { position: relative; overflow: hidden; padding: 0;
+  background: conic-gradient(from 0deg, #f03e3e, #f59f00, #37b24d, #1c7ed6, #7048e8, #f03e3e); }
+.swatch-custom .color-input { position: absolute; inset: -4px; width: calc(100% + 8px); height: calc(100% + 8px);
+  padding: 0; border: none; background: transparent; opacity: 0; cursor: pointer; }
 .slider { display: flex; align-items: center; gap: 8px; }
 .slider input[type=range] { width: 110px; accent-color: var(--accent); }
 .size-input { width: 56px; background: var(--panel-2); border: 1px solid var(--line); color: var(--ink); border-radius: 4px; padding: 5px 7px; font-family: var(--mono); }

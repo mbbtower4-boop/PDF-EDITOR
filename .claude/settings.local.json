@@ -7,7 +7,15 @@
       "PowerShell(npm test)",
       "Bash(git init *)",
       "Bash(git add *)",
-      "Bash(git commit -m 'Initial commit: Paperweight PDF editor v1.7.0 as built in chat *)"
+      "Bash(git commit -m 'Initial commit: Paperweight PDF editor v1.7.0 as built in chat *)",
+      "Bash(npm start *)",
+      "Bash(ping -n 3 127.0.0.1)",
+      "Bash(tasklist)",
+      "PowerShell(node --check src/app.js)",
+      "PowerShell(node --check src/pdfOps.js)",
+      "PowerShell(npm test 2>&1)",
+      "PowerShell(if \\($?\\) { \"app.js OK\" })",
+      "PowerShell(if \\($?\\) { \"pdfOps.js OK\" })"
     ]
   }
 }

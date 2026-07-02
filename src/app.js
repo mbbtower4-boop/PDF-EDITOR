@@ -530,10 +530,10 @@ async function applyForm() {
 
 // ---- Tools ----------------------------------------------------------------
 const TOOL_OPTIONS = {
-  highlight: () => optColorRow('Highlight', ['#ffd54a', '#aef0a1', '#9fd0ff', '#ffb3c1'], 'highlightColor'),
-  pen: () => optColorRow('Pen', ['#d62828', '#1d3557', '#2a9d8f', '#111111'], 'penColor')
+  highlight: () => optColorRow('Highlight', ['#ffd54a', '#aef0a1', '#9fd0ff', '#ffb3c1', '#ffa94d', '#d0bfff', '#63e6be', '#ff8787'], 'highlightColor'),
+  pen: () => optColorRow('Pen', ['#111111', '#d62828', '#1d3557', '#2a9d8f', '#e8590c', '#6741d9', '#2f9e44', '#1971c2', '#f08c00', '#e64980'], 'penColor')
         + optSlider('Width', 'penWidth', 1, 8, 0.5),
-  text: () => optColorRow('Text', ['#111111', '#d62828', '#1d3557', '#ffffff'], 'textColor')
+  text: () => optColorRow('Text', ['#111111', '#d62828', '#1d3557', '#2a9d8f', '#e8590c', '#6741d9', '#2f9e44', '#1971c2', '#ffffff'], 'textColor')
         + `<span class="opt-label">Size</span><input class="size-input" id="optTextSize" type="number" min="6" max="96" value="${state.textSize}">`,
   image: () => (state.pendingImage
         ? `<span class="opt-label">"${(state.pendingImage.name || 'image').replace(/</g, '&lt;')}" — drag a box on the page to place it.</span><button class="tbtn" id="optPickImg">Choose another…</button>`
@@ -542,8 +542,13 @@ const TOOL_OPTIONS = {
   hand: () => '',
 };
 function optColorRow(label, colors, key) {
-  const sw = colors.map((c) => `<span class="swatch${state[key] === c ? ' active' : ''}" data-key="${key}" data-color="${c}" style="background:${c}"></span>`).join('');
-  return `<span class="opt-label">${label}</span><div class="swatches">${sw}</div>`;
+  const cur = String(state[key] || '').toLowerCase();
+  const sw = colors.map((c) => `<span class="swatch${cur === c.toLowerCase() ? ' active' : ''}" data-key="${key}" data-color="${c}" style="background:${c}"></span>`).join('');
+  const isCustom = !colors.some((c) => c.toLowerCase() === cur);
+  // A native color picker for any color the swatches don't cover.
+  const custom = `<label class="swatch swatch-custom${isCustom ? ' active' : ''}" title="Pick a custom color" style="${isCustom ? 'background:' + state[key] : ''}">`
+    + `<input type="color" class="color-input" data-key="${key}" value="${cur || '#000000'}"></label>`;
+  return `<span class="opt-label">${label}</span><div class="swatches">${sw}${custom}</div>`;
 }
 function optSlider(label, key, min, max, step) {
   return `<div class="slider"><span class="opt-label">${label}</span><input type="range" id="opt_${key}" min="${min}" max="${max}" step="${step}" value="${state[key]}"></div>`;
@@ -552,12 +557,26 @@ function renderToolOptions() {
   const html = (TOOL_OPTIONS[state.tool] || (() => ''))();
   els.toolOptions.innerHTML = html;
   els.toolOptions.hidden = !html;
-  els.toolOptions.querySelectorAll('.swatch').forEach((s) => {
+  els.toolOptions.querySelectorAll('.swatch[data-color]').forEach((s) => {
     s.addEventListener('click', () => {
-      state[s.dataset.key] = s.dataset.color;
-      els.toolOptions.querySelectorAll(`.swatch[data-key="${s.dataset.key}"]`).forEach((x) => x.classList.remove('active'));
+      const key = s.dataset.key;
+      state[key] = s.dataset.color;
+      els.toolOptions.querySelectorAll(`.swatch[data-key="${key}"]`).forEach((x) => x.classList.remove('active'));
       s.classList.add('active');
+      const box = els.toolOptions.querySelector(`.swatch-custom input[data-key="${key}"]`);
+      if (box) box.parentElement.style.background = '';
     });
+  });
+  els.toolOptions.querySelectorAll('.color-input').forEach((inp) => {
+    const apply = () => {
+      const key = inp.dataset.key;
+      state[key] = inp.value;
+      els.toolOptions.querySelectorAll(`.swatch[data-key="${key}"]`).forEach((x) => x.classList.remove('active'));
+      inp.parentElement.classList.add('active');
+      inp.parentElement.style.background = inp.value;
+    };
+    inp.addEventListener('input', apply);
+    inp.addEventListener('change', apply);
   });
   const pw = $('opt_penWidth'); if (pw) pw.addEventListener('input', () => { state.penWidth = parseFloat(pw.value); });
   const ts = $('optTextSize'); if (ts) ts.addEventListener('input', () => { state.textSize = Math.max(6, parseInt(ts.value || '14', 10)); });
@@ -606,11 +625,19 @@ els.overlay.addEventListener('pointermove', (e) => {
     ctx.fillStyle = hexToRgba(state.highlightColor, 0.4);
     ctx.fillRect(Math.min(startPt.x, p.x), Math.min(startPt.y, p.y), Math.abs(p.x - startPt.x), Math.abs(p.y - startPt.y));
   } else if (state.tool === 'pen') {
-    penPts.push(p);
+    // Capture the browser's buffered "coalesced" points too: a single pointermove
+    // can hide several intermediate positions on a fast stroke. Using them keeps
+    // the recorded path faithful to what the hand actually drew.
+    const raw = (typeof e.getCoalescedEvents === 'function') ? e.getCoalescedEvents() : [];
+    const moves = raw.length ? raw.map(overlayXY) : [p];
     ctx.strokeStyle = state.penColor; ctx.lineWidth = state.penWidth; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(penPts[penPts.length - 2].x, penPts[penPts.length - 2].y);
-    ctx.lineTo(p.x, p.y); ctx.stroke();
+    for (const q of moves) {
+      const prev = penPts[penPts.length - 1];
+      penPts.push(q);
+      ctx.beginPath();
+      ctx.moveTo(prev.x, prev.y);
+      ctx.lineTo(q.x, q.y); ctx.stroke();
+    }
   } else if (state.tool === 'image') {
     clearOverlay();
     ctx.strokeStyle = '#d98a3d'; ctx.setLineDash([6, 4]); ctx.lineWidth = 1.5;
@@ -900,7 +927,8 @@ function renderTextObjects() {
   layer.innerHTML = '';
   if (!state.viewport) return;
   const vp = state.viewport;
-  const editable = state.tool === 'hand';
+  const editable = state.tool === 'hand';   // move / resize / dbl-click to edit
+  const textTool = state.tool === 'text';    // single click on existing text re-edits it
   for (const t of state.texts) {
     if (t.page !== state.pageIndex) continue;
     const [lx, ty] = vp.convertToViewportPoint(t.x, t.yTop);
@@ -910,19 +938,27 @@ function renderTextObjects() {
     box.style.left = lx + 'px'; box.style.top = ty + 'px';
     box.style.fontSize = (t.size * state.scale) + 'px';
     box.style.color = t.color;
-    box.style.pointerEvents = editable ? 'auto' : 'none';
+    box.style.pointerEvents = (editable || textTool) ? 'auto' : 'none';
     box.appendChild(document.createTextNode(t.text));
-    ['nw', 'ne', 'sw', 'se'].forEach((c) => {
-      const h = document.createElement('div'); h.className = 'img-handle ' + c;
-      h.addEventListener('pointerdown', (e) => startTextResize(e, t, box, c));
-      box.appendChild(h);
-    });
-    const del = document.createElement('button'); del.className = 'img-del'; del.textContent = '✕';
-    del.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); });
-    del.addEventListener('click', (e) => { e.stopPropagation(); deleteText(t); });
-    box.appendChild(del);
-    box.addEventListener('pointerdown', (e) => startTextMove(e, t, box));
-    box.addEventListener('dblclick', (e) => { e.stopPropagation(); editTextObject(t, box); });
+    if (editable) {
+      ['nw', 'ne', 'sw', 'se'].forEach((c) => {
+        const h = document.createElement('div'); h.className = 'img-handle ' + c;
+        h.addEventListener('pointerdown', (e) => startTextResize(e, t, box, c));
+        box.appendChild(h);
+      });
+      const del = document.createElement('button'); del.className = 'img-del'; del.textContent = '✕';
+      del.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); });
+      del.addEventListener('click', (e) => { e.stopPropagation(); deleteText(t); });
+      box.appendChild(del);
+      box.addEventListener('pointerdown', (e) => startTextMove(e, t, box));
+      box.addEventListener('dblclick', (e) => { e.stopPropagation(); editTextObject(t, box); });
+    } else if (textTool) {
+      box.style.cursor = 'text';
+      // On the Text tool, clicking existing words re-edits them instead of
+      // dropping a fresh box on top (the click never reaches the canvas).
+      box.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); });
+      box.addEventListener('click', (e) => { e.stopPropagation(); selectText(t.id); editTextObject(t, box); });
+    }
     layer.appendChild(box);
   }
 }
@@ -991,7 +1027,7 @@ function startTextResize(e, t, box, corner) {
   document.addEventListener('pointerup', onUp);
 }
 function editTextObject(t, box) {
-  if (state.tool !== 'hand') return;
+  if (state.tool !== 'hand' && state.tool !== 'text') return;
   const inp = document.createElement('input');
   inp.type = 'text'; inp.className = 'float-input';
   inp.value = t.text;
