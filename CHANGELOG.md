@@ -1,5 +1,8 @@
 # Paperweight — Changelog
 
+## v1.9.1 — 2026-07-03
+- **Docs:** added `PROJECT.md`, a project reference (architecture, the two builds, run/deploy steps, sync discipline, and gotchas). No app changes.
+
 ## v1.9.0 — 2026-07-02
 - **Real hand cursor + drag-to-pan.** The Hand tool now shows an open-hand cursor that closes while you drag the page to move the view. You can also pan with the **right mouse button under any tool** (the context menu over the document is suppressed), so you can move around mid-annotation.
 - **Fixed Ctrl+wheel zoom garbling/"rotating" the page.** Fast zooming started overlapping pdf.js render() calls on the same canvas — their competing transforms drew the page skewed or seemingly rotated. The active render is now cancelled before a new one starts.
