@@ -1,5 +1,10 @@
 # Paperweight — Changelog
 
+## v1.10.0 — 2026-07-03
+- **Select several pages at once** in the thumbnail rail: **Ctrl+click** toggles a page, **Shift+click** selects a range. A selection bar appears with the count and actions — **Move…** (type a target page number) and **Delete** (also the Delete key). Dragging any selected thumbnail moves the **whole selection as a block**, keeping its order. Plain click still just navigates.
+- **Import several PDFs at once:** the Insert dialog already accepts multi-select (Ctrl+click in the file picker) — now the modal says so — and you can also **drop one or many PDF files straight onto the window**: with a document open they are appended at the end; with none open, the first opens and the rest are appended.
+- Drop-hint and guide texts updated accordingly.
+
 ## v1.9.1 — 2026-07-03
 - **Docs:** added `PROJECT.md`, a project reference (architecture, the two builds, run/deploy steps, sync discipline, and gotchas). No app changes.
 

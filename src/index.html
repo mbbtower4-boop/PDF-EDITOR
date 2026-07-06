@@ -92,8 +92,16 @@
         <span>Pages</span>
         <span id="pageCount" class="muted"></span>
       </div>
+      <div id="selBar" class="sel-bar" hidden>
+        <span id="selCount" class="sel-count">0 selected</span>
+        <button id="selMove" class="tbtn" title="Move the selected pages to a position…">Move…</button>
+        <button id="selDelete" class="tbtn danger" title="Delete the selected pages (Delete)">Delete</button>
+        <button id="selClear" class="tbtn ghost icon" title="Clear selection">✕</button>
+        <input id="selMoveInput" class="text-input sel-move-input" type="text" inputmode="numeric"
+               placeholder="Move to page #, then Enter" hidden />
+      </div>
       <div id="thumbs" class="thumbs"></div>
-      <p class="rail-hint muted">Drag to reorder. Use a thumbnail's menu to rotate or delete.</p>
+      <p class="rail-hint muted">Drag to reorder. <b>Ctrl+click</b> (or Shift+click) picks several pages to move or delete together.</p>
     </aside>
 
     <!-- Center: the document ------------------------------------------ -->
@@ -160,8 +168,9 @@
             <li><b>Image</b> — <b>drag an image file straight onto the page</b>, or use the Image tool and drag a box. With the <b>Hand</b> tool, drag to move or use the corners to resize.</li>
             <li><b>Sign</b> — draw a signature once, then click on the page to place it.</li>
             <li><b>Move around</b> — drag the page with the <b>Hand</b> tool, or hold the <b>right mouse button</b> with any tool. <b>Ctrl + wheel</b> zooms.</li>
-            <li><b>Pages</b> — drag thumbnails to reorder, or use a thumbnail's <b>⇅</b> to jump it to any page number. Each has rotate &amp; delete.</li>
-            <li><b>Insert PDF</b> adds other PDFs at the beginning, end, or after a chosen page. <b>Extract</b> saves a page range.</li>
+            <li><b>Pages</b> — drag thumbnails to reorder, or use a thumbnail's <b>⇅</b> to jump it to any page number. Each has rotate &amp; delete. <b>Ctrl+click</b> (or Shift+click) thumbnails to select several pages, then move them together (drag or "Move…") or delete them in one go.</li>
+            <li><b>Insert PDF</b> adds other PDFs at the beginning, end, or after a chosen page — you can pick <b>several files at once</b> in the dialog, or simply <b>drop PDF files onto the window</b> to append them.</li>
+            <li><b>Extract</b> saves a page range to a new file.</li>
           </ul>
           <h3>Good to know</h3>
           <p class="small muted">This tool <b>adds</b> text as overlays — it does not rewrite text already inside the PDF. "Sign" places a visible signature image; it is not a cryptographic digital signature.</p>
@@ -212,7 +221,7 @@
   <div id="insertModal" class="modal" hidden>
     <div class="modal-card">
       <h2>Insert PDF pages</h2>
-      <p class="small muted">Where should the inserted pages go?</p>
+      <p class="small muted">Where should the inserted pages go? In the file dialog you can <b>select several PDFs at once</b> (Ctrl+click) — they are inserted together, in order.</p>
       <div class="radio-list">
         <label class="radio"><input type="radio" name="insertPos" value="start" /> At the beginning</label>
         <label class="radio"><input type="radio" name="insertPos" value="after" checked /> After page <input id="insertAfter" class="num-input" type="text" inputmode="numeric" value="1" /></label>
@@ -229,7 +238,7 @@
   <div id="dropHint" class="drop-hint" hidden>
     <div class="drop-hint-card">
       <span class="drop-hint-icon">＋</span>
-      <span>Drop an image to place it on this page</span>
+      <span>Drop images to place them on this page — or PDF files to append their pages</span>
     </div>
   </div>
 

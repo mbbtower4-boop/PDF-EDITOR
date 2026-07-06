@@ -45,6 +45,8 @@ const state = {
   highlights: [],      // live highlight rects (baked on save)
   inks: [],            // live pen strokes (baked on save)
   selectedAnnId: null,
+  selectedPages: new Set(), // multi-selected page indices (Ctrl/Shift+click in the rail)
+  thumbAnchor: 0,           // anchor index for Shift+click range selection
 };
 
 // ---- DOM ------------------------------------------------------------------
@@ -55,6 +57,8 @@ const els = {
   zoomIn: $('btnZoomIn'), zoomOut: $('btnZoomOut'), zoomInput: $('zoomInput'),
   toolOptions: $('toolOptions'),
   rail: $('rail'), thumbs: $('thumbs'), pageCount: $('pageCount'),
+  selBar: $('selBar'), selCount: $('selCount'), selMove: $('selMove'),
+  selMoveInput: $('selMoveInput'), selDelete: $('selDelete'), selClear: $('selClear'),
   emptyState: $('emptyState'), stage: $('stage'), pageWrap: $('pageWrap'),
   pageCanvas: $('pageCanvas'), overlay: $('overlayCanvas'),
   imgLayer: $('imgLayer'), txtLayer: $('txtLayer'), annLayer: $('annLayer'),
@@ -121,6 +125,7 @@ async function undo() {
   state.selectedImageId = null;
   state.selectedTextId = null;
   state.selectedAnnId = null;
+  state.selectedPages.clear(); // page indices may no longer match after revert
   els.undo.disabled = state.undo.length === 0;
   await reloadAfterEdit({ rebuildForm: true });
   toast('Reverted last change');
@@ -142,6 +147,8 @@ async function openPdf() {
     state.highlights = [];
     state.inks = [];
     state.selectedAnnId = null;
+    state.selectedPages.clear();
+    state.thumbAnchor = 0;
     els.undo.disabled = true;
     state.pageIndex = 0;
     state.scale = 0; // signal: compute fit on first render
@@ -274,7 +281,8 @@ async function renderThumbs() {
     await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
 
     const wrap = document.createElement('div');
-    wrap.className = 'thumb' + (i === state.pageIndex ? ' current' : '');
+    wrap.className = 'thumb' + (i === state.pageIndex ? ' current' : '') +
+      (state.selectedPages.has(i) ? ' picked' : '');
     wrap.dataset.index = String(i);
     wrap.draggable = true;
     wrap.appendChild(canvas);
@@ -293,6 +301,25 @@ async function renderThumbs() {
 
     wrap.addEventListener('click', (e) => {
       if (e.target.closest('.thumb-act') || e.target.closest('.move-input')) return;
+      // Ctrl/Cmd+click toggles a page in the multi-selection; Shift+click
+      // selects the range from the last anchor. Plain click just navigates
+      // (and clears any multi-selection).
+      if (e.ctrlKey || e.metaKey) {
+        if (state.selectedPages.has(i)) state.selectedPages.delete(i);
+        else state.selectedPages.add(i);
+        state.thumbAnchor = i;
+        refreshPickedThumbs();
+        return;
+      }
+      if (e.shiftKey) {
+        const a = Math.min(state.thumbAnchor, i), b = Math.max(state.thumbAnchor, i);
+        state.selectedPages.clear();
+        for (let k = a; k <= b; k++) state.selectedPages.add(k);
+        refreshPickedThumbs();
+        return;
+      }
+      state.thumbAnchor = i;
+      if (state.selectedPages.size) { state.selectedPages.clear(); refreshPickedThumbs(); }
       state.pageIndex = i; renderPage();
     });
     acts.querySelector('.move').addEventListener('click', (e) => { e.stopPropagation(); promptMovePage(i); });
@@ -302,6 +329,7 @@ async function renderThumbs() {
     attachThumbDnD(wrap);
     els.thumbs.appendChild(wrap);
   }
+  updateSelBar();
 }
 function markCurrentThumb() {
   els.thumbs.querySelectorAll('.thumb').forEach((t) => {
@@ -309,6 +337,65 @@ function markCurrentThumb() {
     t.classList.toggle('current', isCur);
     if (isCur) t.scrollIntoView({ block: 'nearest' });
   });
+}
+
+// ---- Multi-page selection ---------------------------------------------------
+function refreshPickedThumbs() {
+  els.thumbs.querySelectorAll('.thumb').forEach((t) => {
+    t.classList.toggle('picked', state.selectedPages.has(Number(t.dataset.index)));
+  });
+  updateSelBar();
+}
+function clearPageSelection() {
+  if (!state.selectedPages.size) return;
+  state.selectedPages.clear();
+  refreshPickedThumbs();
+}
+function updateSelBar() {
+  const n = state.selectedPages.size;
+  els.selBar.hidden = n === 0;
+  if (n) els.selCount.textContent = n + ' selected';
+  if (els.selMoveInput && !els.selMoveInput.hidden && !n) els.selMoveInput.hidden = true;
+}
+function selectedSorted() { return Array.from(state.selectedPages).sort((a, b) => a - b); }
+
+async function deleteSelectedPages() {
+  const sel = selectedSorted();
+  if (!sel.length) return;
+  if (sel.length >= state.pageCount) { toast('A PDF needs at least one page', true); return; }
+  showBusy('Deleting ' + sel.length + (sel.length === 1 ? ' page…' : ' pages…'));
+  try {
+    pushUndo(); await bakeAll();
+    const nb = await ops.deletePages(PDFLib, state.bytes, sel);
+    state.bytes = nb;
+    // land on the page that took the place of the first deleted one
+    const before = sel.filter((i) => i < state.pageIndex).length;
+    state.pageIndex = Math.max(0, Math.min(state.pageIndex - before, state.pageCount - sel.length - 1));
+    state.selectedPages.clear();
+    await reloadAfterEdit({});
+    toast(sel.length === 1 ? 'Page deleted' : sel.length + ' pages deleted');
+  } catch (e) { toast(e.message, true); } finally { hideBusy(); }
+}
+
+// Move the selected pages (as a block, keeping their order) so the block
+// starts at target position `t` (0-based, expressed in the FINAL document).
+async function moveSelectedPagesTo(t) {
+  const sel = selectedSorted();
+  if (!sel.length) return;
+  const others = [];
+  for (let i = 0; i < state.pageCount; i++) if (!state.selectedPages.has(i)) others.push(i);
+  const at = Math.max(0, Math.min(t, others.length));
+  const order = others.slice(0, at).concat(sel, others.slice(at));
+  showBusy('Moving ' + sel.length + (sel.length === 1 ? ' page…' : ' pages…'));
+  try {
+    pushUndo(); await bakeAll();
+    const nb = await ops.reorderPages(PDFLib, state.bytes, order);
+    state.bytes = nb;
+    state.pageIndex = at;
+    state.selectedPages.clear();
+    await reloadAfterEdit({});
+    toast(sel.length === 1 ? 'Page moved' : sel.length + ' pages moved');
+  } catch (e) { toast(e.message, true); } finally { hideBusy(); }
 }
 
 // ---- Thumbnail drag-to-reorder -------------------------------------------
@@ -337,7 +424,18 @@ function attachThumbDnD(el) {
     const rect = el.getBoundingClientRect();
     const after = e.clientY > rect.top + rect.height / 2;
     el.classList.remove('drop-before', 'drop-after');
-    if (dragFrom == null || dragFrom === to) return;
+    if (dragFrom == null) return;
+    // Dragging a thumb that is part of the multi-selection moves the whole
+    // selection as a block (keeping its order) to the drop point.
+    if (state.selectedPages.size > 1 && state.selectedPages.has(dragFrom)) {
+      const insertion = to + (after ? 1 : 0); // in current page coords
+      let at = 0; // block start position among the non-selected pages
+      for (let i = 0; i < insertion; i++) if (!state.selectedPages.has(i)) at++;
+      moveSelectedPagesTo(at);
+      return;
+    }
+    if (dragFrom === to) return;
+    clearPageSelection();
     reorderPages(dragFrom, to, after);
   });
 }
@@ -1371,6 +1469,25 @@ els.zoomInput.addEventListener('keydown', (e) => {
 });
 els.zoomInput.addEventListener('blur', () => { if (state.pdfDoc) els.zoomInput.value = String(Math.round(state.scale * 100)); });
 
+// Multi-page selection bar (in the thumbnail rail)
+els.selDelete.addEventListener('click', deleteSelectedPages);
+els.selClear.addEventListener('click', clearPageSelection);
+els.selMove.addEventListener('click', () => {
+  els.selMoveInput.hidden = !els.selMoveInput.hidden;
+  if (!els.selMoveInput.hidden) { els.selMoveInput.value = ''; els.selMoveInput.focus(); }
+});
+els.selMoveInput.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Escape') { els.selMoveInput.hidden = true; return; }
+  if (e.key !== 'Enter') return;
+  const n = parseInt(els.selMoveInput.value, 10);
+  if (!Number.isInteger(n) || n < 1 || n > state.pageCount) {
+    toast('Enter a page between 1 and ' + state.pageCount, true); return;
+  }
+  els.selMoveInput.hidden = true;
+  moveSelectedPagesTo(n - 1);
+});
+
 document.querySelectorAll('.tool').forEach((b) => b.addEventListener('click', () => { if (!b.disabled) selectTool(b.dataset.tool); }));
 document.querySelectorAll('.ptab').forEach((tab) => {
   tab.addEventListener('click', () => {
@@ -1402,6 +1519,7 @@ document.addEventListener('keydown', (e) => {
     else if (state.selectedTextId) { const o = state.texts.find((x) => x.id === state.selectedTextId); if (o) deleteText(o); }
     else deleteAnn(state.selectedAnnId);
   }
+  else if (e.key === 'Delete' && state.selectedPages.size) deleteSelectedPages();
   else if (e.code === 'KeyH') selectTool('hand');
 });
 
@@ -1441,14 +1559,64 @@ document.addEventListener('dragover', (e) => {
   }
 }, true);
 document.addEventListener('dragenter', (e) => { e.preventDefault(); }, true);
+function isPdfFile(f) {
+  if (!f) return false;
+  return f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
+}
 document.addEventListener('drop', async (e) => {
   e.preventDefault();
   clearTimeout(dropHintTimer); els.dropHint.hidden = true;
-  const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []).filter(isImageFile);
-  if (!files.length) return; // internal (thumbnail) drop, or no images — let it be
+  const all = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+  const pdfs = all.filter(isPdfFile);
+  const images = all.filter(isImageFile);
+  if (pdfs.length) { await dropPdfs(pdfs); return; }
+  if (!images.length) return; // internal (thumbnail) drop, or nothing usable — let it be
   if (!state.pdfDoc) { toast('Open a PDF first, then drop the image', true); return; }
-  await dropImages(files, e.clientX, e.clientY);
+  await dropImages(images, e.clientX, e.clientY);
 }, true);
+
+// Drop one or many PDFs onto the window: with no document open, the first one
+// opens and the rest are appended; with a document open, all are appended.
+async function dropPdfs(files) {
+  showBusy(files.length === 1 ? 'Opening…' : 'Adding ' + files.length + ' PDFs…');
+  try {
+    const list = [];
+    for (const f of files) {
+      try { list.push({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) }); }
+      catch (err) { toast('Could not read ' + f.name, true); }
+    }
+    if (!list.length) return;
+    if (!state.pdfDoc) {
+      state.bytes = list[0].data;
+      state.name = list[0].name || 'document.pdf';
+      state.undo = [];
+      state.images = []; state.texts = []; state.highlights = []; state.inks = [];
+      state.selectedImageId = null; state.selectedTextId = null; state.selectedAnnId = null;
+      state.selectedPages.clear();
+      els.undo.disabled = true;
+      state.pageIndex = 0;
+      state.scale = 0;
+      if (list.length > 1) {
+        state.bytes = await ops.insertPdfsAt(PDFLib, state.bytes, list.slice(1).map((x) => x.data), Infinity);
+      }
+      await loadDoc({ rebuildForm: true, fit: true });
+      els.emptyState.hidden = true;
+      els.stage.hidden = false;
+      setDocActionsEnabled(true);
+      els.docName.textContent = state.name;
+      selectTool('hand');
+      toast(list.length === 1 ? ('Opened ' + state.name)
+        : ('Opened ' + state.name + ' + ' + (list.length - 1) + ' more appended'));
+    } else {
+      pushUndo(); await bakeAll();
+      const firstNew = state.pageCount;
+      state.bytes = await ops.insertPdfsAt(PDFLib, state.bytes, list.map((x) => x.data), state.pageCount);
+      state.pageIndex = firstNew; // jump to the first appended page
+      await reloadAfterEdit({ rebuildForm: true });
+      toast(list.length === 1 ? 'PDF appended at the end' : list.length + ' PDFs appended at the end');
+    }
+  } catch (err) { toast(err.message, true); } finally { hideBusy(); }
+}
 
 async function dropImages(files, clientX, clientY) {
   const vp = state.viewport;
