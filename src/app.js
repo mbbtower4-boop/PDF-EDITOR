@@ -44,6 +44,7 @@ const state = {
   selectedTextId: null,
   highlights: [],      // live highlight rects (baked on save)
   inks: [],            // live pen strokes (baked on save)
+  manualMarks: [],     // live Inbar manual-op marks (baked on save; deletable/undoable)
   selectedAnnId: null,
   selectedPages: new Set(), // multi-selected page indices (Ctrl/Shift+click in the rail)
   thumbAnchor: 0,           // anchor index for Shift+click range selection
@@ -72,6 +73,8 @@ const els = {
   rangeCancel: $('rangeCancel'), rangeGo: $('rangeGo'),
   insertModal: $('insertModal'), insertAfter: $('insertAfter'),
   insertCancel: $('insertCancel'), insertGo: $('insertGo'),
+  manualOp: $('btnManualOp'), manualModal: $('manualModal'), manualPoints: $('manualPoints'),
+  manualCancel: $('manualCancel'), manualGo: $('manualGo'), manualAuto: $('manualAuto'), manualClear: $('manualClear'),
   toast: $('toast'), busy: $('busy'), busyMsg: $('busyMsg'),
   dropHint: $('dropHint'),
   appVersion: $('appVersion'),
@@ -94,7 +97,7 @@ function hideBusy() { els.busy.hidden = true; }
 const copyBytes = (u8) => u8.slice(); // pdf.js detaches buffers; always hand it a copy
 
 function setDocActionsEnabled(on) {
-  [els.save, els.merge, els.split, els.zoomIn, els.zoomOut, els.gotoPage, els.zoomInput].forEach((b) => { b.disabled = !on; });
+  [els.save, els.merge, els.split, els.manualOp, els.zoomIn, els.zoomOut, els.gotoPage, els.zoomInput].forEach((b) => { b.disabled = !on; });
   document.querySelectorAll('.tool').forEach((b) => { b.disabled = !on; });
 }
 
@@ -103,6 +106,7 @@ function cloneImg(o) { return { id: o.id, page: o.page, x: o.x, y: o.y, w: o.w, 
 function cloneText(o) { return { id: o.id, page: o.page, x: o.x, yTop: o.yTop, text: o.text, size: o.size, color: o.color }; }
 function cloneHl(o) { return { id: o.id, page: o.page, x: o.x, y: o.y, w: o.w, h: o.h, color: o.color, opacity: o.opacity }; }
 function cloneInk(o) { return { id: o.id, page: o.page, ox: o.ox, oy: o.oy, w: o.w, h: o.h, color: o.color, width: o.width, points: o.points.map((p) => ({ dx: p.dx, dy: p.dy })) }; }
+function cloneMark(o) { return { id: o.id, page: o.page, x: o.x, y: o.y, kind: o.kind }; }
 function pushUndo() {
   state.undo.push({
     bytes: state.bytes,
@@ -110,6 +114,7 @@ function pushUndo() {
     texts: state.texts.map(cloneText),
     highlights: state.highlights.map(cloneHl),
     inks: state.inks.map(cloneInk),
+    manualMarks: state.manualMarks.map(cloneMark),
   });
   if (state.undo.length > 20) state.undo.shift();
   els.undo.disabled = state.undo.length === 0;
@@ -122,6 +127,7 @@ async function undo() {
   state.texts = snap.texts || [];
   state.highlights = snap.highlights || [];
   state.inks = snap.inks || [];
+  state.manualMarks = snap.manualMarks || [];
   state.selectedImageId = null;
   state.selectedTextId = null;
   state.selectedAnnId = null;
@@ -146,6 +152,7 @@ async function openPdf() {
     state.selectedTextId = null;
     state.highlights = [];
     state.inks = [];
+    state.manualMarks = [];
     state.selectedAnnId = null;
     state.selectedPages.clear();
     state.thumbAnchor = 0;
@@ -584,6 +591,231 @@ async function doExtract() {
     const saved = await window.api.savePdf(nb, suggested);
     if (saved) toast('Saved ' + saved.split(/[\\/]/).pop());
   } catch (e) { toast(e.message, true); } finally { hideBusy(); }
+}
+
+// ---- Manual-operation marks (Inbar traffic-signal timing plans) ------------
+// Parses "A:87/90, B:11/13" -> [{ pic, start, stop }]
+function parseManualPoints(str) {
+  const out = [];
+  for (let raw of String(str || '').split(',')) {
+    raw = raw.trim(); if (!raw) continue;
+    const m = /^(.+?):\s*([\d.]+)\s*\/\s*([\d.]+)$/.exec(raw);
+    if (!m) throw new Error('Could not understand "' + raw + '" — expected e.g. A:87/90');
+    out.push({ pic: m[1].trim(), start: parseFloat(m[2]), stop: parseFloat(m[3]) });
+  }
+  if (!out.length) throw new Error('No points given');
+  return out;
+}
+
+// Auto-calibration from the page itself, via pdf.js text positions:
+//  - the time axis = the y-band holding the most 1–3 digit numbers on the page;
+//    linear regression number -> x gives (x0, scale) in PDF user space.
+//  - the ידני.ת row = the baseline of the "ידני" label, when it extracts.
+// Falls back to Inbar's standard A4 layout when detection fails.
+async function calibrateInbarPlan() {
+  const page = await state.pdfDoc.getPage(state.pageIndex + 1);
+  const tc = await page.getTextContent();
+  const nums = [];
+  let manualY = null;
+  for (const it of tc.items) {
+    const s = (it.str || '').trim();
+    if (!s) continue;
+    const x = it.transform[4], y = it.transform[5];
+    if (/^\d{1,3}$/.test(s)) nums.push({ v: parseInt(s, 10), x: x + (it.width || 0) / 2, y });
+    if (s.indexOf('ידני') !== -1) manualY = y;
+  }
+  let axis = null;
+  const bands = new Map();
+  for (const n of nums) {
+    const b = Math.round(n.y / 4) * 4;
+    if (!bands.has(b)) bands.set(b, []);
+    bands.get(b).push(n);
+  }
+  for (const arr of bands.values()) if (!axis || arr.length > axis.length) axis = arr;
+  let cal = null;
+  if (axis && axis.length >= 3) {
+    const a = axis.filter((n) => n.v <= 200);
+    const N = a.length;
+    const sv = a.reduce((s, n) => s + n.v, 0), sx = a.reduce((s, n) => s + n.x, 0);
+    const svv = a.reduce((s, n) => s + n.v * n.v, 0), svx = a.reduce((s, n) => s + n.v * n.x, 0);
+    const denom = N * svv - sv * sv;
+    if (N >= 3 && denom !== 0) {
+      const scale = (N * svx - sv * sx) / denom;
+      const x0 = (sx - scale * sv) / N;
+      if (scale > 0.5 && scale < 20) cal = { x0, scale };
+    }
+  }
+  return { cal, manualY };
+}
+
+// Full automatic analysis of an Inbar phase diagram, from its printed text:
+// reconstructs each phase's green intervals from the start/end second markers
+// Inbar prints above the bars (disambiguating wrapped bars via the duration
+// numbers printed inside them), finds each picture's all-green window, and
+// derives manual-operation points per the design rules:
+//   start (zinuk) = the second the picture is fully formed (window start),
+//   stop  (atsira) = the last second the picture is still whole (window end).
+async function analyzeInbarPlan() {
+  const page = await state.pdfDoc.getPage(state.pageIndex + 1);
+  const tc = await page.getTextContent();
+  const items = tc.items
+    .map((it) => ({ s: (it.str || '').trim(), x: it.transform[4] + (it.width || 0) / 2, y: it.transform[5] }))
+    .filter((it) => it.s);
+
+  // -- time axis + cycle length ----------------------------------------------
+  const nums = items.filter((it) => /^\d{1,3}$/.test(it.s)).map((it) => ({ v: parseInt(it.s, 10), x: it.x, y: it.y }));
+  const bands = new Map();
+  for (const n of nums) { const b = Math.round(n.y / 4) * 4; if (!bands.has(b)) bands.set(b, []); bands.get(b).push(n); }
+  let axis = null;
+  for (const arr of bands.values()) if (arr.length >= 4 && (!axis || arr.length > axis.length)) axis = arr;
+  if (!axis) throw new Error('לא זוהה ציר זמן בעמוד — ודא שזו דיאגרמת פאזות של ענבר');
+  const N = axis.length;
+  const sv = axis.reduce((s, n) => s + n.v, 0), sx = axis.reduce((s, n) => s + n.x, 0);
+  const svv = axis.reduce((s, n) => s + n.v * n.v, 0), svx = axis.reduce((s, n) => s + n.v * n.x, 0);
+  const scale = (N * svx - sv * sx) / (N * svv - sv * sv);
+  const x0 = (sx - scale * sv) / N;
+  const T = (x) => (x - x0) / scale; // x -> seconds
+  const cycle = Math.max.apply(null, axis.map((n) => n.v));
+  if (!(cycle >= 20 && cycle <= 200)) throw new Error('אורך מחזור לא סביר: ' + cycle);
+
+  // -- phase rows (vehicle digits / pedestrian a–z on the left margin) --------
+  const rows = items
+    .filter((it) => (/^\d{1,2}$/.test(it.s) || /^[a-z]$/.test(it.s)) && it.x < x0 - 6)
+    .map((it) => ({ label: it.s, y: it.y }));
+  if (rows.length < 2) throw new Error('לא זוהו שורות מופעים');
+
+  // -- green segments per row --------------------------------------------------
+  // Inbar's layout (measured): start/end second-markers print ~10pt above the
+  // row label's baseline; duration numbers print ~1.3pt above it (inside the bar).
+  const mod = (t) => ((t % cycle) + cycle) % cycle;
+  const xEnd = x0 + scale * cycle;
+  const phases = [];
+  for (const row of rows) {
+    const inRow = nums.filter((n) => n.x >= x0 - 6 && n.x <= xEnd + 6 && n.v <= cycle + 1);
+    const markers = inRow
+      .filter((n) => n.y - row.y > 6 && n.y - row.y < 15 && Math.abs(T(n.x) - n.v) < 3.5)
+      .sort((a, b) => a.v - b.v);
+    const durations = inRow
+      .filter((n) => n.y - row.y > -4 && n.y - row.y < 5)
+      .map((n) => ({ v: n.v, t: mod(T(n.x)) }));
+    if (markers.length < 2 || markers.length % 2 !== 0) continue;
+    const vals = markers.map((m) => m.v);
+    // Two possible pairings of the sorted markers (plain vs. one bar wrapping the
+    // cycle end). Score each: +1 when a pair's length matches a printed duration,
+    // +1 more when that duration number is physically printed INSIDE the pair's
+    // bar — the decisive hint when a bar is exactly half a cycle long.
+    const pairingA = [], pairingB = [];
+    for (let i = 0; i + 1 < vals.length; i += 2) pairingA.push([vals[i], vals[i + 1]]);
+    pairingB.push([vals[vals.length - 1], vals[0]]); // wrapped bar
+    for (let i = 1; i + 1 < vals.length; i += 2) pairingB.push([vals[i], vals[i + 1]]);
+    const insidePair = (t, p) => mod(t - p[0]) < mod(p[1] - p[0] || cycle);
+    const score = (pairs) => pairs.reduce((s, p) => {
+      const len = mod(p[1] - p[0]);
+      let best = 0;
+      for (const d of durations) {
+        if (Math.abs(d.v - len) <= 1) best = Math.max(best, insidePair(d.t, p) ? 2 : 1);
+      }
+      return s + best;
+    }, 0);
+    const segs = (durations.length && score(pairingB) > score(pairingA)) ? pairingB : pairingA;
+    phases.push({ label: row.label, segs });
+  }
+  if (!phases.length) throw new Error('לא נמצאו פסי ירוק במופעים');
+
+  // -- pictures + their all-green windows -------------------------------------
+  const letters = items.filter((it) => /^[A-Z]$/.test(it.s) && it.x > x0 - 6 && it.x < xEnd + 6).map((it) => ({ pic: it.s, t: mod(T(it.x)) }));
+  if (!letters.length) throw new Error('לא זוהתה שורת התמונות');
+  const inSeg = (t, seg) => mod(t - seg[0]) < mod(seg[1] - seg[0] || cycle);
+  const windows = {};
+  for (const L of letters) {
+    let back = Infinity, fwd = Infinity, members = 0;
+    for (const ph of phases) {
+      const seg = ph.segs.find((sg) => inSeg(L.t, sg));
+      if (!seg) continue;
+      members++;
+      back = Math.min(back, mod(L.t - seg[0]));
+      fwd = Math.min(fwd, mod(seg[1] - L.t));
+    }
+    if (members < 1 || !isFinite(back)) continue;
+    const start = mod(L.t - back), len = back + fwd;
+    if (!windows[L.pic] || len > windows[L.pic].len) windows[L.pic] = { start, end: mod(start + len), len, members };
+  }
+  const pics = Object.keys(windows).sort();
+  if (!pics.length) throw new Error('לא חושבו חלונות לתמונות');
+
+  // -- manual-operation points per the design rules ----------------------------
+  const points = pics.map((p) => {
+    const w = windows[p];
+    const s = mod(w.start);
+    const start = Math.round(mod(Math.ceil(s)));       // window start (zinuk)
+    const stop = Math.round(mod(Math.floor(s + w.len))); // window end   (atsira)
+    return { pic: p, start, stop, window: Math.round(w.len * 10) / 10, members: w.members };
+  });
+  return { cycle, points };
+}
+
+async function autoManualPoints() {
+  showBusy('מנתח את התוכנית…');
+  try {
+    const res = await analyzeInbarPlan();
+    els.manualPoints.value = res.points.map((p) => p.pic + ':' + p.start + '/' + p.stop).join(', ');
+    toast('מחזור ' + res.cycle + ' שנ׳ — חושבו ' + res.points.length + ' תמונות (חלונות: ' +
+      res.points.map((p) => p.pic + '=' + p.window + 's').join(', ') + '). בדוק ולחץ "סמן".');
+  } catch (e) { console.error(e); toast(e.message, true); }
+  finally { hideBusy(); }
+}
+
+function openManualModal() {
+  els.manualPoints.value = '';
+  els.manualModal.hidden = false;
+  els.manualPoints.focus();
+}
+
+async function doManualOps() {
+  let pts;
+  try { pts = parseManualPoints(els.manualPoints.value); }
+  catch (e) { toast(e.message, true); return; }
+  els.manualModal.hidden = true;
+  showBusy('Marking manual-operation points…');
+  try {
+    const { cal, manualY } = await calibrateInbarPlan();
+    const sizes = await ops.getPageSizes(PDFLib, state.bytes);
+    const H = sizes[state.pageIndex].height;
+    // Inbar A4 defaults, measured from Inbar 16 output:
+    const x0 = cal ? cal.x0 : 79.32;
+    const scale = cal ? cal.scale : 3.0609;
+    // Text baseline sits ~2.5pt under the symbols' center on Inbar's row.
+    const y = manualY != null ? manualY + 2.5 : H - 575.6;
+    const mk = (kind, t) => ({
+      id: 'man' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      page: state.pageIndex, x: x0 + scale * t, y, kind,
+    });
+    pushUndo();
+    // Re-marking replaces this page's existing app marks (so "change" is clean).
+    state.manualMarks = state.manualMarks.filter((m) => m.page !== state.pageIndex);
+    for (const p of pts) { state.manualMarks.push(mk('start', p.start), mk('stop', p.stop)); }
+    state.selectedAnnId = null;
+    renderAnnObjects();
+    els.undo.disabled = state.undo.length === 0;
+    toast('Marked ' + pts.length + ' picture(s)' + (cal ? ' (axis auto-detected)' : ' (standard Inbar layout)') + ' — deletable until saved');
+  } catch (e) { console.error(e); toast(e.message, true); }
+  finally { hideBusy(); }
+}
+
+// Remove the manual-op marks the app added on THIS page (not yet baked into the
+// file). Only the current page is touched — marks on other pages stay put.
+// Marks already saved into a PDF and reopened are page content and can't be
+// lifted out here — re-marking on a fresh copy is the way to change those.
+function clearManualMarks() {
+  const n = state.manualMarks.filter((m) => m.page === state.pageIndex).length;
+  if (!n) { toast('אין סימוני תפעול שנוספו בגליון הנוכחי (סימונים שכבר נשמרו בקובץ אינם ניתנים למחיקה כאן)'); return; }
+  pushUndo();
+  state.manualMarks = state.manualMarks.filter((m) => m.page !== state.pageIndex);
+  state.selectedAnnId = null;
+  renderAnnObjects();
+  els.undo.disabled = state.undo.length === 0;
+  els.manualModal.hidden = true;
+  toast('נמחקו ' + n + ' סימוני תפעול בגליון הנוכחי');
 }
 
 // ---- Forms ----------------------------------------------------------------
@@ -1221,14 +1453,19 @@ async function applyOverlays(bytes) {
       { page: k.page, points: k.points.map((p) => ({ x: k.ox + p.dx, y: k.oy + p.dy })), color: k.color, width: k.width }
     )));
   }
+  if (state.manualMarks.length) {
+    b = await ops.stampManualOps(PDFLib, b, state.manualMarks.map((m) => (
+      { page: m.page, x: m.x, y: m.y, kind: m.kind }
+    )));
+  }
   b = await applyImages(b, state.images);
   b = await applyTexts(b, state.texts);
   return b;
 }
 async function bakeAll() {
-  if (!state.images.length && !state.texts.length && !state.highlights.length && !state.inks.length) return;
+  if (!state.images.length && !state.texts.length && !state.highlights.length && !state.inks.length && !state.manualMarks.length) return;
   state.bytes = await applyOverlays(state.bytes);
-  state.images = []; state.texts = []; state.highlights = []; state.inks = [];
+  state.images = []; state.texts = []; state.highlights = []; state.inks = []; state.manualMarks = [];
   state.selectedImageId = null; state.selectedTextId = null; state.selectedAnnId = null;
 }
 
@@ -1299,6 +1536,48 @@ function renderAnnObjects() {
     box.addEventListener('pointerdown', (e) => startAnnMove(e, k, box, 'ink'));
     layer.appendChild(box);
   }
+
+  // Inbar manual-op marks: red '+' (start) / '‡' (stop), drawn to Inbar's own
+  // geometry. Live and deletable until saved (then baked via stampManualOps).
+  const sc = state.scale || 1;
+  const W = 1.32 * sc, V = 3.06 * sc, H = 2.28 * sc, VS = 1.2 * sc, HS = 1.8 * sc;
+  for (const m of state.manualMarks) {
+    if (m.page !== state.pageIndex) continue;
+    const [cx, cy] = vp.convertToViewportPoint(m.x, m.y);
+    const halfW = Math.max(H, VS) + 9, halfH = V + 9; // padding makes it clickable
+    const bw = 2 * halfW, bh = 2 * halfH;
+    const box = document.createElement('div');
+    box.className = 'ann-obj ann-mark' + (m.id === state.selectedAnnId ? ' selected' : '');
+    box.dataset.id = m.id;
+    box.style.left = (cx - halfW) + 'px'; box.style.top = (cy - halfH) + 'px';
+    box.style.width = bw + 'px'; box.style.height = bh + 'px';
+    box.style.pointerEvents = editable ? 'auto' : 'none';
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', '100%'); svg.setAttribute('height', '100%');
+    svg.setAttribute('viewBox', '0 0 ' + bw + ' ' + bh);
+    svg.style.display = 'block'; svg.style.pointerEvents = 'none'; svg.style.overflow = 'visible';
+    const RED = '#e10600', SW = String(Math.max(1, W));
+    const seg = (x1, y1, x2, y2) => {
+      const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      l.setAttribute('x1', x1.toFixed(1)); l.setAttribute('y1', y1.toFixed(1));
+      l.setAttribute('x2', x2.toFixed(1)); l.setAttribute('y2', y2.toFixed(1));
+      l.setAttribute('stroke', RED); l.setAttribute('stroke-width', SW); l.setAttribute('stroke-linecap', 'butt');
+      svg.appendChild(l);
+    };
+    if (m.kind === 'start') {
+      seg(halfW, halfH - V, halfW, halfH + V);
+      seg(halfW - H, halfH, halfW + H, halfH);
+    } else {
+      seg(halfW - VS, halfH - V, halfW - VS, halfH + V);
+      seg(halfW + VS, halfH - V, halfW + VS, halfH + V);
+      seg(halfW - H, halfH - HS, halfW + H, halfH - HS);
+      seg(halfW - H, halfH + HS, halfW + H, halfH + HS);
+    }
+    box.appendChild(svg);
+    addAnnDelete(box, () => deleteAnn(m.id));
+    box.addEventListener('pointerdown', (e) => { if (state.tool === 'hand') { e.stopPropagation(); selectAnn(m.id); } });
+    layer.appendChild(box);
+  }
 }
 function selectAnn(id) {
   state.selectedAnnId = id;
@@ -1311,6 +1590,7 @@ function deleteAnn(id) {
   pushUndo();
   state.highlights = state.highlights.filter((o) => o.id !== id);
   state.inks = state.inks.filter((o) => o.id !== id);
+  state.manualMarks = state.manualMarks.filter((o) => o.id !== id);
   state.selectedAnnId = null;
   renderAnnObjects();
   toast('Annotation removed');
@@ -1453,6 +1733,12 @@ els.rangeGo.addEventListener('click', doExtract);
 els.rangeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doExtract(); });
 els.insertCancel.addEventListener('click', () => { els.insertModal.hidden = true; });
 els.insertGo.addEventListener('click', doInsert);
+els.manualOp.addEventListener('click', openManualModal);
+els.manualCancel.addEventListener('click', () => { els.manualModal.hidden = true; });
+els.manualGo.addEventListener('click', doManualOps);
+els.manualAuto.addEventListener('click', autoManualPoints);
+els.manualClear.addEventListener('click', clearManualMarks);
+els.manualPoints.addEventListener('keydown', (e) => { if (e.key === 'Enter') doManualOps(); });
 els.insertAfter.addEventListener('keydown', (e) => { if (e.key === 'Enter') doInsert(); });
 els.gotoPage.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;
@@ -1590,7 +1876,7 @@ async function dropPdfs(files) {
       state.bytes = list[0].data;
       state.name = list[0].name || 'document.pdf';
       state.undo = [];
-      state.images = []; state.texts = []; state.highlights = []; state.inks = [];
+      state.images = []; state.texts = []; state.highlights = []; state.inks = []; state.manualMarks = [];
       state.selectedImageId = null; state.selectedTextId = null; state.selectedAnnId = null;
       state.selectedPages.clear();
       els.undo.disabled = true;
@@ -1680,8 +1966,10 @@ function nudgeSelected(e) {
   } else if (state.selectedAnnId) {
     const h = state.highlights.find((x) => x.id === state.selectedAnnId);
     const k = state.inks.find((x) => x.id === state.selectedAnnId);
+    const m = state.manualMarks.find((x) => x.id === state.selectedAnnId);
     if (h) { h.x += dx; h.y += dy; }
     else if (k) { k.ox += dx; k.oy += dy; }
+    else if (m) { m.x += dx; m.y += dy; }
     renderAnnObjects();
   }
 }

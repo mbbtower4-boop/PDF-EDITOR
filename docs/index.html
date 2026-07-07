@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob: data:; font-src 'self';" />
-  <meta name="app-version" content="1.10.0" />
+  <meta name="app-version" content="1.13.1" />
   <meta name="theme-color" content="#12151b" />
   <title>Paperweight — online PDF editor</title>
   <link rel="icon" href="assets/paperweight.ico" />
@@ -70,6 +70,10 @@
       <button id="btnSplit" class="tbtn ghost" title="Export a page range" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8 8l12 8"/><path d="M8 16l12-8"/></svg>
         Extract
+      </button>
+      <button id="btnManualOp" class="tbtn ghost" title="Mark manual-operation points on an Inbar signal timing plan (סימון תפעול ידני)" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v4"/><path d="M12 17v4"/><path d="M3 12h4"/><path d="M17 12h4"/></svg>
+        Signal plan
       </button>
     </div>
 
@@ -218,6 +222,24 @@
         <button id="rangeCancel" class="tbtn">Cancel</button>
         <button id="rangeGo" class="tbtn primary">Save selection…</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Manual-operation (Inbar signal plan) modal ----------------------- -->
+  <div id="manualModal" class="modal" hidden>
+    <div class="modal-card" dir="rtl">
+      <h2>סימון תפעול ידני — תוכנית זמנים של ענבר</h2>
+      <p class="small muted">לכל תמונה: <code dir="ltr">אות:שניית_זינוק/שניית_עצירה</code>, מופרד בפסיקים. הסימון נעשה על <b>העמוד הנוכחי</b>, בסמלים המקוריים של ענבר (+ = זינוק, ‡ = עצירה) בשורת ידני.ת.</p>
+      <input id="manualPoints" class="text-input" type="text" dir="ltr" placeholder="A:87/90, B:11/13, C:32/35, D:74/76" />
+      <div class="modal-actions">
+        <button id="manualAuto" class="tbtn" title="קריאת הדיאגרמה וחישוב הנקודות אוטומטית לפי כללי התכנון">⚡ חשב אוטומטית מהתוכנית</button>
+        <button id="manualClear" class="tbtn" title="מחיקת הסימונים שהאפליקציה הוסיפה בגליון הנוכחי בלבד (עדיין לא נשמרו בקובץ)">🗑 מחק סימונים בגליון</button>
+        <span class="spacer"></span>
+        <button id="manualCancel" class="tbtn">ביטול</button>
+        <button id="manualGo" class="tbtn primary">סמן על העמוד</button>
+      </div>
+      <p class="small muted">ציר הזמן ושורת ידני.ת מזוהים אוטומטית מתוכן העמוד; אם הזיהוי נכשל נעשה שימוש בפריסת ענבר הסטנדרטית (A4).</p>
+      <p class="small muted">הסימונים נשארים <b>ניתנים לעריכה</b> עד השמירה: לחיצה עם כלי היד בוחרת סימן — <b>✕</b> או Delete מוחקים, וחצים מזיזים. חישוב מחדש מחליף את הסימונים בעמוד. "🗑 מחק סימונים בגליון" מוחק את כל הסימונים <b>בגליון הנוכחי בלבד</b>. Ctrl+Z לביטול. לאחר שמירה הסימונים הופכים לחלק מהעמוד.</p>
     </div>
   </div>
 

@@ -156,6 +156,16 @@ async function pageCount(bytes) {
   const sz = await ops.imageSize(PDFLib, jpg2x2);
   check('imageSize reads JPG dimensions', sz.width === 2 && sz.height === 2);
 
+
+  // manual-operation marks (Inbar signal plans): draws without throwing, output loads
+  const marked = await ops.stampManualOps(PDFLib, a, [
+    { page: 0, x: 100, y: 150, kind: 'start' },
+    { page: 0, x: 120, y: 150, kind: 'stop' },
+    { page: 2, x: 80, y: 150, kind: 'start' },
+  ]);
+  check('stampManualOps output loads', (await pageCount(marked)) === 3);
+  check('stampManualOps grew the file', marked.length > a.length);
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('THREW:', e); process.exit(1); });

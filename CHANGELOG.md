@@ -1,5 +1,21 @@
 # Paperweight — Changelog
 
+## v1.13.1 — 2026-07-07
+- **Signal plan: "🗑 מחק סימונים בגליון" now clears only the current page.** The clear-all button previously removed the app's manual-op marks on *every* page; it now deletes only the marks on the page you're viewing, leaving other pages untouched. (Single-mark ✕/Delete and re-marking were already page-scoped.)
+
+## v1.13.0 — 2026-07-07
+- **Signal plan: manual-op marks are now editable and erasable until you save.** The stamped red '+'/'‡' symbols are live objects (like highlights and pen strokes): with the Hand tool, click a mark to select it, then **✕** or **Delete** to remove it, arrow keys to nudge. Re-running the calculation **replaces** the page's marks. New **"🗑 מחק סימונים"** button in the Signal-plan dialog clears all app-added marks at once, and **Ctrl+Z** undoes any of it. The marks bake into the PDF only on Save. (Marks in a file that was already saved and reopened are page content and can't be lifted out — re-mark a fresh copy to change those.)
+
+## v1.12.1 — 2026-07-07
+- **Signal plan: the manual-operation stop now marks the END of each picture.** Previously the automatic tool placed the עצירה (stop) ~2s after the זינוק (start); per the design intent it now spans the whole picture — start at the picture's first fully-green second and stop at its last, so each תמונה is bracketed at its beginning and its end.
+
+## v1.12.0 — 2026-07-06
+- **Signal plan: one-click automation (⚡ חשב אוטומטית מהתוכנית).** The tool now reads the Inbar phase diagram itself — reconstructs every phase's green intervals from the second-markers printed above the bars (using the in-bar duration numbers to disambiguate bars that wrap past the cycle end), derives each picture's all-green window, and proposes manual-operation points per the design rules (start = the second the picture is fully formed; stop ≈ 2s later, inside the window). The computed points fill the input for engineer review before stamping.
+
+## v1.11.0 — 2026-07-06
+- **New "Signal plan" tool (סימון תפעול ידני):** marks manual-operation start/stop points on Israeli **Inbar 16** traffic-signal timing-plan PDFs, using Inbar's own symbols (red '+' for start, red '‡' for stop — geometry vector-extracted from genuine Inbar output). Enter per-picture points like `A:87/90, B:11/13`; the tool auto-detects the diagram's time axis (linear fit over the axis numbers via pdf.js text positions) and the ידני.ת row (from its label), with a fallback to Inbar's standard A4 layout. Marks are applied to the current page and participate in Undo/Save like any other edit.
+- Engine: new `PdfOps.stampManualOps()` (UMD, covered by `npm test`).
+
 ## v1.10.0 — 2026-07-03
 - **Select several pages at once** in the thumbnail rail: **Ctrl+click** toggles a page, **Shift+click** selects a range. A selection bar appears with the count and actions — **Move…** (type a target page number) and **Delete** (also the Delete key). Dragging any selected thumbnail moves the **whole selection as a block**, keeping its order. Plain click still just navigates.
 - **Import several PDFs at once:** the Insert dialog already accepts multi-select (Ctrl+click in the file picker) — now the modal says so — and you can also **drop one or many PDF files straight onto the window**: with a document open they are appended at the end; with none open, the first opens and the rest are appended.

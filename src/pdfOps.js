@@ -294,6 +294,34 @@
     return buildFromOrder(PDFLib, bytes, order);
   }
 
+  // ---- Manual-operation marks for Israeli "Inbar" traffic-signal plans ------
+  // Draws the exact symbols Inbar 16 prints on the ידני.ת row of a phase
+  // diagram (geometry vector-extracted from Inbar's own PDF output):
+  //   start ("zinuk")  = red '+'  — vertical ±3.06pt, horizontal ±2.28pt
+  //   stop  ("atsira") = red '‡'  — verticals at ±1.2pt, horizontals ±2.28pt at ±1.8pt
+  // items: [{ page, x, y, kind: 'start' | 'stop' }] in PDF user space
+  // (x = time-axis position of the second, y = center of the ידני.ת row).
+  async function stampManualOps(PDFLib, bytes, items) {
+    const doc = await load(PDFLib, bytes);
+    const RED = PDFLib.rgb(1, 0, 0);
+    const W = 1.32, V = 3.06, H = 2.28, VS = 1.2, HS = 1.8;
+    for (const it of items) {
+      const page = doc.getPage(it.page);
+      const line = (x1, y1, x2, y2) =>
+        page.drawLine({ start: { x: x1, y: y1 }, end: { x: x2, y: y2 }, thickness: W, color: RED });
+      if (it.kind === 'start') {
+        line(it.x, it.y - V, it.x, it.y + V);
+        line(it.x - H, it.y, it.x + H, it.y);
+      } else {
+        line(it.x - VS, it.y - V, it.x - VS, it.y + V);
+        line(it.x + VS, it.y - V, it.x + VS, it.y + V);
+        line(it.x - H, it.y - HS, it.x + H, it.y - HS);
+        line(it.x - H, it.y + HS, it.x + H, it.y + HS);
+      }
+    }
+    return doc.save();
+  }
+
   // Apply a whole batch of edits in one save (renderer uses this on export).
   async function applyEdits(PDFLib, bytes, edits) {
     let b = toBytes(bytes);
@@ -321,6 +349,7 @@
     stampHighlights,
     stampInk,
     stampImages,
+    stampManualOps,
     imageSize,
     applyEdits,
   };
