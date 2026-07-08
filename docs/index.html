@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob: data:; font-src 'self';" />
-  <meta name="app-version" content="1.13.1" />
+  <meta name="app-version" content="1.14.0" />
   <meta name="theme-color" content="#12151b" />
   <title>Paperweight — online PDF editor</title>
   <link rel="icon" href="assets/paperweight.ico" />
@@ -172,7 +172,7 @@
           <h3>Quick guide</h3>
           <ul class="guide">
             <li><b>Highlight / Pen</b> — drag on the page. Each has preset colors plus a rainbow chip for any custom color. With the <b>Hand</b> tool, click a highlight or stroke to select it: drag to move, ✕ or Delete to erase, corners resize a highlight.</li>
-            <li><b>Text</b> — click, type, then Enter. To change words later: with the <b>Text</b> tool click the text and retype, or with the <b>Hand</b> tool double-click it. Hand tool also moves it and resizes by the corners.</li>
+            <li><b>Text</b> — click, type, then Enter. <b>Hebrew and other languages are supported</b> (right-to-left is handled automatically). To change the words later: with the <b>Text</b> tool click the text and retype, or with the <b>Hand</b> tool double-click it. Select it with the <b>Hand</b> tool to <b>change its colour or size</b> from the bar at the top; Hand tool also moves it and resizes by the corners.</li>
             <li><b>Image</b> — <b>drag an image file straight onto the page</b>, or use the Image tool and drag a box. With the <b>Hand</b> tool, drag to move or use the corners to resize.</li>
             <li><b>Sign</b> — draw a signature once, then click on the page to place it.</li>
             <li><b>Move around</b> — drag the page with the <b>Hand</b> tool, or hold the <b>right mouse button</b> with any tool. <b>Ctrl + wheel</b> zooms.</li>
@@ -274,6 +274,8 @@
   <!-- Libraries (vendored, served locally) ---------------------------- -->
   <script src="vendor/pdf-lib/pdf-lib.min.js"></script>
   <script src="vendor/pdfjs/pdf.min.js"></script>
+  <script src="vendor/fontkit/fontkit.umd.min.js"></script>
+  <script src="vendor/fonts/rubik-font.js"></script>
   <script src="pdfOps.js"></script>
   <script src="web-api.js"></script>
   <script src="app.js"></script>

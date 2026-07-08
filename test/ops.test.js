@@ -166,6 +166,32 @@ async function pageCount(bytes) {
   check('stampManualOps output loads', (await pageCount(marked)) === 3);
   check('stampManualOps grew the file', marked.length > a.length);
 
+  // ---- Unicode / Hebrew text -----------------------------------------------
+  check('needsUnicodeFont detects Hebrew', ops.needsUnicodeFont('שלום') === true);
+  check('needsUnicodeFont false for Latin', ops.needsUnicodeFont('hello 123 (x)') === false);
+  check('toVisualRtl reverses Hebrew', ops.toVisualRtl('שלום') === 'םולש');
+  check('toVisualRtl keeps embedded digits readable', ops.toVisualRtl('כביש 4') === '4 שיבכ');
+  check('toVisualRtl leaves Latin untouched', ops.toVisualRtl('hello') === 'hello');
+
+  // Hebrew stamping requires the bundled font: without it, it must throw clearly.
+  let heThrew = false;
+  try { await ops.stampText(PDFLib, a, [{ page: 0, x: 40, y: 40, text: 'עברית', size: 14, color: '#000000' }]); }
+  catch (e) { heThrew = /Unicode font/i.test(e.message); }
+  check('stampText refuses Hebrew without a font', heThrew);
+
+  // With fontkit + the bundled Rubik TTF, Hebrew stamps successfully.
+  const fs = require('fs');
+  const fontkit = require('../vendor/fontkit/fontkit.umd.min.js');
+  const fontBytes = fs.readFileSync(require('path').join(__dirname, '..', 'vendor', 'fonts', 'Rubik-Regular.ttf'));
+  const heStamped = await ops.stampText(
+    PDFLib, a,
+    [{ page: 0, x: 40, y: 60, text: 'אזור עבודות דיפו', size: 16, color: '#1d3557' },
+     { page: 1, x: 40, y: 60, text: 'cat eyes', size: 12, color: '#111111' }],
+    { fontkit, fontBytes }
+  );
+  check('stampText embeds Hebrew (valid pdf, 3 pages)', (await pageCount(heStamped)) === 3);
+  check('stampText Hebrew grew the file (font subset embedded)', heStamped.length > a.length + 2000);
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('THREW:', e); process.exit(1); });

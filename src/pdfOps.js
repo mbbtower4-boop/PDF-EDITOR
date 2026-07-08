@@ -171,17 +171,54 @@
     return PDFLib.rgb(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
   }
 
+  // ---- Unicode / RTL text helpers -------------------------------------------
+  // Helvetica (a PDF base-14 font) only encodes WinAnsi (Latin-1-ish) — Hebrew
+  // and other scripts throw "WinAnsi cannot encode". Such text needs a bundled
+  // Unicode font embedded via fontkit (opts below).
+  const RTL_RE = /[\u0590-\u05FF\u0600-\u06FF\uFB1D-\uFB4F\uFE70-\uFEFF]/;
+  function needsUnicodeFont(s) { return /[^\u0020-\u00FF]/.test(s); }
+
+  // PDF drawText lays glyphs out left-to-right in string order, so RTL text
+  // must be converted from logical to VISUAL order (what a viewer extracts is
+  // then the visual sequence, which reads correctly right-to-left). This is a
+  // pragmatic bidi for labels: split into directional runs, reverse the run
+  // order, reverse characters only inside RTL runs (so digits/Latin embedded
+  // in Hebrew stay readable), and mirror paired brackets.
+  function toVisualRtl(s) {
+    if (!RTL_RE.test(s)) return s;
+    const MIRROR = { '(': ')', ')': '(', '[': ']', ']': '[', '{': '}', '}': '{', '<': '>', '>': '<' };
+    const runs = s.match(/[\u0590-\u05FF\u0600-\u06FF\uFB1D-\uFB4F\uFE70-\uFEFF]+|[A-Za-z0-9#@&%+.,:\/\\-]*[A-Za-z0-9][A-Za-z0-9#@&%+.,:\/\\-]*|\s+|[\s\S]/gu) || [s];
+    return runs.reverse().map((run) => {
+      if (RTL_RE.test(run)) return Array.from(run).reverse().join('');
+      if (/^[A-Za-z0-9]/.test(run) || /[A-Za-z0-9]$/.test(run)) return run; // LTR run stays logical
+      return Array.from(run).map((ch) => MIRROR[ch] || ch).join('');
+    }).join('');
+  }
+
   // items: [{ page, x, y, text, size, color }]  (y is baseline, bottom-left origin)
-  async function stampText(PDFLib, bytes, items) {
+  // opts (optional): { fontkit, fontBytes } — a fontkit instance plus TTF bytes
+  // for a Unicode font; required when any item contains non-WinAnsi characters.
+  async function stampText(PDFLib, bytes, items, opts) {
     const doc = await load(PDFLib, bytes);
     const font = await doc.embedFont(PDFLib.StandardFonts.Helvetica);
+    let uniFont = null;
+    const wantsUnicode = items.some((it) => needsUnicodeFont(String(it.text ?? '')));
+    if (wantsUnicode) {
+      if (!opts || !opts.fontkit || !opts.fontBytes) {
+        throw new Error('This text needs the bundled Unicode font (Hebrew or other non-Latin characters), but it was not provided');
+      }
+      doc.registerFontkit(opts.fontkit);
+      uniFont = await doc.embedFont(opts.fontBytes, { subset: true });
+    }
     for (const it of items) {
       const page = doc.getPage(it.page);
-      page.drawText(String(it.text ?? ''), {
+      const raw = String(it.text ?? '');
+      const useUni = needsUnicodeFont(raw);
+      page.drawText(useUni ? toVisualRtl(raw) : raw, {
         x: it.x,
         y: it.y,
         size: it.size || 14,
-        font,
+        font: useUni ? uniFont : font,
         color: rgb(PDFLib, it.color || '#111111'),
       });
     }
@@ -352,5 +389,8 @@
     stampManualOps,
     imageSize,
     applyEdits,
+    // text helpers (exported mainly for tests)
+    needsUnicodeFont,
+    toVisualRtl,
   };
 });

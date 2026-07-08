@@ -1,5 +1,9 @@
 # Paperweight — Changelog
 
+## v1.14.0 — 2026-07-08
+- **Hebrew (and other non-Latin) text is now supported.** The Text tool used to throw `WinAnsi cannot encode "…"` on Hebrew because it stamped with Helvetica, which only covers Latin. It now embeds a bundled Unicode font (Rubik, OFL) via fontkit whenever the text needs it, and lays RTL text out visually so it reads correctly right-to-left; the on-screen box and the floating editor auto-detect direction (`dir="auto"`). Latin text still uses Helvetica. Everything stays offline — the font is bundled, nothing is fetched.
+- **Edit placed text: recolor & resize.** Select a text box with the **Hand** tool and a properties bar appears at the top — pick a new **color** (presets + custom), change the **size**, re-edit the words, or delete it. Previously there was no way to change a text's colour after dropping it.
+
 ## v1.13.1 — 2026-07-07
 - **Signal plan: "🗑 מחק סימונים בגליון" now clears only the current page.** The clear-all button previously removed the app's manual-op marks on *every* page; it now deletes only the marks on the page you're viewing, leaving other pages untouched. (Single-mark ✕/Delete and re-marking were already page-scoped.)
 

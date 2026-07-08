@@ -906,7 +906,58 @@ function optColorRow(label, colors, key) {
 function optSlider(label, key, min, max, step) {
   return `<div class="slider"><span class="opt-label">${label}</span><input type="range" id="opt_${key}" min="${min}" max="${max}" step="${step}" value="${state[key]}"></div>`;
 }
+// Editable properties for the currently-selected text object (color + size),
+// shown in the options strip when the Hand tool has a text selected. This is
+// how you recolour/resize text AFTER placing it.
+let tpSizeSnapped = false;
+function selectedText() { return state.texts.find((x) => x.id === state.selectedTextId) || null; }
+function setSelectedTextColor(c) {
+  const t = selectedText(); if (!t) return;
+  pushUndo(); t.color = c; state.textColor = c;
+  renderTextObjects(); renderToolOptions();
+}
+function renderTextPropsBar() {
+  const t = selectedText();
+  if (!t) { renderToolOptions(); return; }
+  const colors = ['#111111', '#d62828', '#1d3557', '#2a9d8f', '#e8590c', '#6741d9', '#2f9e44', '#1971c2', '#ffffff'];
+  const cur = String(t.color || '').toLowerCase();
+  const sw = colors.map((c) => `<span class="swatch${cur === c.toLowerCase() ? ' active' : ''}" data-color="${c}" style="background:${c}"></span>`).join('');
+  const isCustom = !colors.some((c) => c.toLowerCase() === cur);
+  const custom = `<label class="swatch swatch-custom${isCustom ? ' active' : ''}" title="Custom color" style="${isCustom ? 'background:' + t.color : ''}"><input type="color" class="tp-color" value="${cur || '#000000'}"></label>`;
+  els.toolOptions.innerHTML =
+    '<span class="opt-label">Text color</span><div class="swatches">' + sw + custom + '</div>' +
+    '<span class="opt-label">Size</span><input class="size-input" id="tpSize" type="number" min="6" max="200" value="' + Math.round(t.size) + '">' +
+    '<button class="tbtn" id="tpEdit">Edit words…</button>' +
+    '<button class="tbtn danger" id="tpDel">Delete</button>';
+  els.toolOptions.hidden = false;
+  els.toolOptions.querySelectorAll('.swatch[data-color]').forEach((s) => {
+    s.addEventListener('click', () => setSelectedTextColor(s.dataset.color));
+  });
+  const ci = els.toolOptions.querySelector('.tp-color');
+  if (ci) ci.addEventListener('change', () => setSelectedTextColor(ci.value));
+  tpSizeSnapped = false;
+  const sz = $('tpSize');
+  if (sz) {
+    sz.addEventListener('input', () => {
+      const cur2 = selectedText(); if (!cur2) return;
+      const v = Math.max(4, Math.min(200, parseInt(sz.value || '14', 10) || 14));
+      if (!tpSizeSnapped) { pushUndo(); tpSizeSnapped = true; }
+      cur2.size = v; state.textSize = v; renderTextObjects();
+    });
+    sz.addEventListener('change', () => { tpSizeSnapped = false; });
+    sz.addEventListener('keydown', (e) => e.stopPropagation());
+  }
+  const ed = $('tpEdit');
+  if (ed) ed.addEventListener('click', () => {
+    const box = els.txtLayer.querySelector('.txt-obj[data-id="' + t.id + '"]');
+    if (box) editTextObject(t, box);
+  });
+  const dl = $('tpDel');
+  if (dl) dl.addEventListener('click', () => deleteText(t));
+}
 function renderToolOptions() {
+  // A selected text object (Hand tool) gets its own editable properties strip.
+  if (state.tool === 'hand' && state.selectedTextId && selectedText()) { renderTextPropsBar(); return; }
   const html = (TOOL_OPTIONS[state.tool] || (() => ''))();
   els.toolOptions.innerHTML = html;
   els.toolOptions.hidden = !html;
@@ -1081,7 +1132,7 @@ function placeTextInput(p) {
   const existing = els.pageWrap.querySelector('.float-input');
   if (existing) existing.remove();
   const inp = document.createElement('input');
-  inp.type = 'text'; inp.className = 'float-input';
+  inp.type = 'text'; inp.className = 'float-input'; inp.dir = 'auto';
   const sizePx = state.textSize * state.scale;
   inp.style.left = p.x + 'px';
   inp.style.top = p.y + 'px';
@@ -1227,6 +1278,7 @@ function selectImage(id) {
   els.imgLayer.querySelectorAll('.img-obj').forEach((el) => el.classList.toggle('selected', el.dataset.id === id));
   if (els.txtLayer) els.txtLayer.querySelectorAll('.txt-obj').forEach((el) => el.classList.remove('selected'));
   if (els.annLayer) els.annLayer.querySelectorAll('.ann-obj').forEach((el) => el.classList.remove('selected'));
+  renderToolOptions();
 }
 function startMove(e, obj, box) {
   if (state.tool !== 'hand') return;
@@ -1317,6 +1369,7 @@ function renderTextObjects() {
     box.style.fontSize = (t.size * state.scale) + 'px';
     box.style.color = t.color;
     box.style.pointerEvents = (editable || textTool) ? 'auto' : 'none';
+    box.dir = 'auto'; // Hebrew/RTL renders right-to-left like the baked PDF
     box.appendChild(document.createTextNode(t.text));
     if (editable) {
       ['nw', 'ne', 'sw', 'se'].forEach((c) => {
@@ -1347,10 +1400,12 @@ function selectText(id) {
   els.txtLayer.querySelectorAll('.txt-obj').forEach((el) => el.classList.toggle('selected', el.dataset.id === id));
   els.imgLayer.querySelectorAll('.img-obj').forEach((el) => el.classList.remove('selected'));
   if (els.annLayer) els.annLayer.querySelectorAll('.ann-obj').forEach((el) => el.classList.remove('selected'));
+  renderToolOptions(); // show the selected text's color/size controls
 }
 function deselectAll() {
   state.selectedImageId = null; state.selectedTextId = null; state.selectedAnnId = null;
   renderImageObjects(); renderTextObjects(); renderAnnObjects();
+  renderToolOptions();
 }
 function startTextMove(e, t, box) {
   if (state.tool !== 'hand') return;
@@ -1407,7 +1462,7 @@ function startTextResize(e, t, box, corner) {
 function editTextObject(t, box) {
   if (state.tool !== 'hand' && state.tool !== 'text') return;
   const inp = document.createElement('input');
-  inp.type = 'text'; inp.className = 'float-input';
+  inp.type = 'text'; inp.className = 'float-input'; inp.dir = 'auto';
   inp.value = t.text;
   inp.style.left = box.style.left; inp.style.top = box.style.top;
   inp.style.fontSize = box.style.fontSize; inp.style.color = t.color;
@@ -1432,13 +1487,32 @@ function deleteText(t) {
   state.texts = state.texts.filter((o) => o.id !== t.id);
   state.selectedTextId = null;
   renderTextObjects();
+  renderToolOptions();
   toast('Text removed');
+}
+// Bundled Unicode font (Rubik — Hebrew + Latin), decoded once from the base64
+// script in vendor/fonts/rubik-font.js. Needed because Helvetica (WinAnsi)
+// cannot encode Hebrew; see pdfOps.stampText.
+let _hebFontBytes = null;
+function hebFontBytes() {
+  if (_hebFontBytes) return _hebFontBytes;
+  if (!window.PW_FONT_RUBIK) return null;
+  const bin = atob(window.PW_FONT_RUBIK);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  _hebFontBytes = arr;
+  return arr;
 }
 async function applyTexts(bytes, texts) {
   if (!texts.length) return bytes;
+  const needUni = texts.some((t) => ops.needsUnicodeFont(String(t.text || '')));
+  const opts = needUni ? { fontkit: window.fontkit, fontBytes: hebFontBytes() } : undefined;
+  if (needUni && (!opts.fontkit || !opts.fontBytes)) {
+    throw new Error('Hebrew text support files failed to load (fontkit / bundled font)');
+  }
   return ops.stampText(PDFLib, bytes, texts.map((t) => (
     { page: t.page, x: t.x, y: t.yTop - t.size, text: t.text, size: t.size, color: t.color }
-  )));
+  )), opts);
 }
 // Bake every live overlay (highlights + ink + text + images) into a byte copy.
 async function applyOverlays(bytes) {
@@ -1585,6 +1659,7 @@ function selectAnn(id) {
   els.annLayer.querySelectorAll('.ann-obj').forEach((el) => el.classList.toggle('selected', el.dataset.id === id));
   els.imgLayer.querySelectorAll('.img-obj').forEach((el) => el.classList.remove('selected'));
   els.txtLayer.querySelectorAll('.txt-obj').forEach((el) => el.classList.remove('selected'));
+  renderToolOptions();
 }
 function deleteAnn(id) {
   pushUndo();
