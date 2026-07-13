@@ -1,6 +1,6 @@
 {
   "name": "paperweight-pdf-editor",
-  "version": "1.14.0",
+  "version": "1.15.1",
   "description": "A local, offline desktop PDF editor: view, annotate, add text, fill forms, sign, and reshape pages.",
   "main": "main.js",
   "scripts": {

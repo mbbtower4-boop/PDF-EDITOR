@@ -74,6 +74,7 @@ const els = {
   insertModal: $('insertModal'), insertAfter: $('insertAfter'),
   insertCancel: $('insertCancel'), insertGo: $('insertGo'),
   manualOp: $('btnManualOp'), manualModal: $('manualModal'), manualPoints: $('manualPoints'),
+  manualComp: $('manualComp'),
   manualCancel: $('manualCancel'), manualGo: $('manualGo'), manualAuto: $('manualAuto'), manualClear: $('manualClear'),
   toast: $('toast'), busy: $('busy'), busyMsg: $('busyMsg'),
   dropHint: $('dropHint'),
@@ -594,6 +595,27 @@ async function doExtract() {
 }
 
 // ---- Manual-operation marks (Inbar traffic-signal timing plans) ------------
+// Parses the official picture composition, e.g. "A: 1,b,c,e,g | B: 3,a,c,f,g"
+// -> [{ pic, members }]. Pictures split on | ; or newlines; members are the
+// phase labels as printed on the diagram rows (digits = vehicle, a-z = peds).
+// Returns null for empty input (composition is optional).
+function parseComposition(str) {
+  const s = String(str || '').trim();
+  if (!s) return null;
+  const out = [];
+  for (const raw of s.split(/[;|\n]+/)) {
+    const t = raw.trim(); if (!t) continue;
+    const m = /^([A-Za-z])\s*[:=]\s*(.+)$/.exec(t);
+    if (!m) throw new Error('הרכב תמונות: לא הובן "' + t + '" — צפוי למשל A: 1,b,c,e,g');
+    const members = m[2].split(/[,\s]+/).filter(Boolean)
+      .map((w) => (/^\d{1,2}$/.test(w) ? w : w.toLowerCase()));
+    if (!members.length || members.some((w) => !/^(\d{1,2}|[a-z])$/.test(w)))
+      throw new Error('הרכב תמונות: תווית מופע לא חוקית בתמונה ' + m[1].toUpperCase());
+    out.push({ pic: m[1].toUpperCase(), members });
+  }
+  return out.length ? out : null;
+}
+
 // Parses "A:87/90, B:11/13" -> [{ pic, start, stop }]
 function parseManualPoints(str) {
   const out = [];
@@ -608,33 +630,47 @@ function parseManualPoints(str) {
 }
 
 // Auto-calibration from the page itself, via pdf.js text positions:
-//  - the time axis = the y-band holding the most 1–3 digit numbers on the page;
-//    linear regression number -> x gives (x0, scale) in PDF user space.
-//  - the ידני.ת row = the baseline of the "ידני" label, when it extracts.
-// Falls back to Inbar's standard A4 layout when detection fails.
+//  - the time axis: Inbar prints the SAME 0..cycle scale twice — a top band
+//    (above the phase bars) and a bottom band (below the pictures row). We take
+//    every y-band that reads like an axis (≥5 numbers spanning 0..≥20) and fit
+//    number -> x over their combined points (both share one scale), giving a
+//    robust (x0, scale) in PDF user space, plus the top/bottom band y's.
+//  - the ידני.ת row = the "ידני" label baseline. Inbar prints it on both margins;
+//    we keep only hits that sit between the two axes (guards against a stray
+//    match in the header/footer) and average them.
+// The row FLOATS with the number of phase rows, so there is no fixed geometric
+// offset — the label is the only reliable anchor. When it can't be read we fall
+// back to a fixed offset above the detected bottom axis (layout-relative), and
+// only as a last resort to Inbar's standard A4 row height (see doManualOps).
 async function calibrateInbarPlan() {
   const page = await state.pdfDoc.getPage(state.pageIndex + 1);
   const tc = await page.getTextContent();
   const nums = [];
-  let manualY = null;
+  const manualYs = [];
   for (const it of tc.items) {
     const s = (it.str || '').trim();
     if (!s) continue;
     const x = it.transform[4], y = it.transform[5];
     if (/^\d{1,3}$/.test(s)) nums.push({ v: parseInt(s, 10), x: x + (it.width || 0) / 2, y });
-    if (s.indexOf('ידני') !== -1) manualY = y;
+    if (s.indexOf('ידני') !== -1) manualYs.push(y);
   }
-  let axis = null;
   const bands = new Map();
   for (const n of nums) {
     const b = Math.round(n.y / 4) * 4;
     if (!bands.has(b)) bands.set(b, []);
     bands.get(b).push(n);
   }
-  for (const arr of bands.values()) if (!axis || arr.length > axis.length) axis = arr;
-  let cal = null;
-  if (axis && axis.length >= 3) {
-    const a = axis.filter((n) => n.v <= 200);
+  // Bands that look like a time axis: many numbers, reaching up to the cycle.
+  const axisBands = [...bands.values()]
+    .filter((arr) => arr.length >= 5 && Math.max.apply(null, arr.map((n) => n.v)) >= 20)
+    .sort((a, b) => b.length - a.length);
+  let cal = null, topAxisY = null, botAxisY = null;
+  if (axisBands.length) {
+    // Combine the densest axis band(s) — top+bottom share one horizontal scale,
+    // so fitting them together just adds points and steadies the regression.
+    const best = axisBands[0].length;
+    const use = axisBands.filter((arr) => arr.length >= best - 2);
+    const a = [].concat.apply([], use).filter((n) => n.v <= 200);
     const N = a.length;
     const sv = a.reduce((s, n) => s + n.v, 0), sx = a.reduce((s, n) => s + n.x, 0);
     const svv = a.reduce((s, n) => s + n.v * n.v, 0), svx = a.reduce((s, n) => s + n.v * n.x, 0);
@@ -644,8 +680,16 @@ async function calibrateInbarPlan() {
       const x0 = (sx - scale * sv) / N;
       if (scale > 0.5 && scale < 20) cal = { x0, scale };
     }
+    const ys = use.map((arr) => arr.reduce((s, n) => s + n.y, 0) / arr.length);
+    topAxisY = Math.max.apply(null, ys); // larger pdf-y = higher on page
+    botAxisY = Math.min.apply(null, ys);
   }
-  return { cal, manualY };
+  // ידני.ת label baseline, restricted to the band between the two axes.
+  let manualY = null;
+  const valid = manualYs.filter((y) =>
+    (topAxisY == null || y < topAxisY) && (botAxisY == null || y > botAxisY));
+  if (valid.length) manualY = valid.reduce((s, y) => s + y, 0) / valid.length;
+  return { cal, manualY, botAxisY };
 }
 
 // Full automatic analysis of an Inbar phase diagram, from its printed text:
@@ -655,7 +699,81 @@ async function calibrateInbarPlan() {
 // derives manual-operation points per the design rules:
 //   start (zinuk) = the second the picture is fully formed (window start),
 //   stop  (atsira) = the last second the picture is still whole (window end).
-async function analyzeInbarPlan() {
+// PRIMARY: Inbar itself draws a dotted blue vertical line at every picture
+// start/stop (its own +/‡ marks sit exactly on these lines) — when those lines
+// are found in the page's vector content, the points are read straight off
+// them, which reproduces Inbar's output 1:1. Fallbacks, in order: the official
+// picture composition (`comp`, exact intersection of member greens), then
+// inference from the letter positions (approximate: a leftover green
+// overlapping the letter can shrink the window).
+
+// Detects Inbar's dotted blue picture-boundary lines in the page's operator
+// list and returns their x positions (PDF pts). The lines are drawn as
+// thousands of tiny outlined dots in Inbar's boundary blue; a boundary column
+// collects ~2,300 micro-segments vs ~40 for the faint second-grid / letter
+// guides, so a per-column count threshold separates them cleanly.
+async function extractInbarBoundaries(page) {
+  const opList = await page.getOperatorList();
+  const OPS = pdfjsLib.OPS;
+  const fnA = opList.fnArray, argA = opList.argsArray;
+  let ctm = [1, 0, 0, 1, 0, 0];
+  const stack = [];
+  const mul = (m, n) => [m[0]*n[0]+m[2]*n[1], m[1]*n[0]+m[3]*n[1], m[0]*n[2]+m[2]*n[3], m[1]*n[2]+m[3]*n[3], m[0]*n[4]+m[2]*n[5]+m[4], m[1]*n[4]+m[3]*n[5]+m[5]];
+  const ap = (m, x, y) => [m[0]*x + m[2]*y + m[4], m[1]*x + m[3]*y + m[5]];
+  let fill = null, strk = null, pend = [];
+  const xs = [];
+  const isBlue = (c) => c && c[2] > 150 && c[2] - c[0] > 60 && c[2] - c[1] > 60;
+  const flush = (col) => { if (isBlue(col)) for (const v of pend) xs.push(v); pend = []; };
+  for (let i = 0; i < fnA.length; i++) {
+    const fn = fnA[i], a = argA[i];
+    switch (fn) {
+      case OPS.save: stack.push({ ctm: ctm.slice(), fill, strk }); break;
+      case OPS.restore: { const s = stack.pop(); if (s) { ctm = s.ctm; fill = s.fill; strk = s.strk; } break; }
+      case OPS.transform: ctm = mul(ctm, a); break;
+      case OPS.setFillRGBColor: fill = [a[0], a[1], a[2]]; break;
+      case OPS.setStrokeRGBColor: strk = [a[0], a[1], a[2]]; break;
+      case OPS.constructPath: {
+        const ops = a[0], co = a[1];
+        let k = 0, cx = 0, cy = 0;
+        for (const op of ops) {
+          if (op === OPS.moveTo) { cx = co[k++]; cy = co[k++]; }
+          else if (op === OPS.lineTo) {
+            const nx = co[k++], ny = co[k++];
+            const p1 = ap(ctm, cx, cy), p2 = ap(ctm, nx, ny);
+            pend.push((p1[0] + p2[0]) / 2);
+            cx = nx; cy = ny;
+          }
+          else if (op === OPS.rectangle) { k += 4; }
+          else if (op === OPS.curveTo) { k += 6; cx = co[k - 2]; cy = co[k - 1]; }
+          else if (op === OPS.curveTo2 || op === OPS.curveTo3) { k += 4; cx = co[k - 2]; cy = co[k - 1]; }
+        }
+        break;
+      }
+      case OPS.stroke: case OPS.closeStroke: flush(strk); break;
+      case OPS.fill: case OPS.eoFill: flush(fill); break;
+      case OPS.fillStroke: case OPS.eoFillStroke: flush(strk || fill); break;
+      case OPS.endPath: pend = []; break;
+    }
+  }
+  // histogram over 1pt x-cells; cluster adjacent hot cells (a boundary line's
+  // dots zigzag ~1.6pt wide), weighted center per cluster.
+  const cells = new Map();
+  for (const x of xs) {
+    const c = Math.round(x);
+    const e = cells.get(c) || { n: 0, wx: 0 };
+    e.n++; e.wx += x; cells.set(c, e);
+  }
+  const hot = [...cells.entries()].filter(([, e]) => e.n >= 200).sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const [c, e] of hot) {
+    const m = merged.length && c - merged[merged.length - 1].c <= 2 ? merged[merged.length - 1] : null;
+    if (m) { m.n += e.n; m.wx += e.wx; m.c = c; }
+    else merged.push({ c, n: e.n, wx: e.wx });
+  }
+  return merged.map((m) => m.wx / m.n);
+}
+
+async function analyzeInbarPlan(comp) {
   const page = await state.pdfDoc.getPage(state.pageIndex + 1);
   const tc = await page.getTextContent();
   const items = tc.items
@@ -677,53 +795,175 @@ async function analyzeInbarPlan() {
   const T = (x) => (x - x0) / scale; // x -> seconds
   const cycle = Math.max.apply(null, axis.map((n) => n.v));
   if (!(cycle >= 20 && cycle <= 200)) throw new Error('אורך מחזור לא סביר: ' + cycle);
-
-  // -- phase rows (vehicle digits / pedestrian a–z on the left margin) --------
-  const rows = items
-    .filter((it) => (/^\d{1,2}$/.test(it.s) || /^[a-z]$/.test(it.s)) && it.x < x0 - 6)
-    .map((it) => ({ label: it.s, y: it.y }));
-  if (rows.length < 2) throw new Error('לא זוהו שורות מופעים');
-
-  // -- green segments per row --------------------------------------------------
-  // Inbar's layout (measured): start/end second-markers print ~10pt above the
-  // row label's baseline; duration numbers print ~1.3pt above it (inside the bar).
   const mod = (t) => ((t % cycle) + cycle) % cycle;
   const xEnd = x0 + scale * cycle;
-  const phases = [];
-  for (const row of rows) {
-    const inRow = nums.filter((n) => n.x >= x0 - 6 && n.x <= xEnd + 6 && n.v <= cycle + 1);
-    const markers = inRow
-      .filter((n) => n.y - row.y > 6 && n.y - row.y < 15 && Math.abs(T(n.x) - n.v) < 3.5)
-      .sort((a, b) => a.v - b.v);
-    const durations = inRow
-      .filter((n) => n.y - row.y > -4 && n.y - row.y < 5)
-      .map((n) => ({ v: n.v, t: mod(T(n.x)) }));
-    if (markers.length < 2 || markers.length % 2 !== 0) continue;
-    const vals = markers.map((m) => m.v);
-    // Two possible pairings of the sorted markers (plain vs. one bar wrapping the
-    // cycle end). Score each: +1 when a pair's length matches a printed duration,
-    // +1 more when that duration number is physically printed INSIDE the pair's
-    // bar — the decisive hint when a bar is exactly half a cycle long.
-    const pairingA = [], pairingB = [];
-    for (let i = 0; i + 1 < vals.length; i += 2) pairingA.push([vals[i], vals[i + 1]]);
-    pairingB.push([vals[vals.length - 1], vals[0]]); // wrapped bar
-    for (let i = 1; i + 1 < vals.length; i += 2) pairingB.push([vals[i], vals[i + 1]]);
-    const insidePair = (t, p) => mod(t - p[0]) < mod(p[1] - p[0] || cycle);
-    const score = (pairs) => pairs.reduce((s, p) => {
-      const len = mod(p[1] - p[0]);
-      let best = 0;
-      for (const d of durations) {
-        if (Math.abs(d.v - len) <= 1) best = Math.max(best, insidePair(d.t, p) ? 2 : 1);
-      }
-      return s + best;
-    }, 0);
-    const segs = (durations.length && score(pairingB) > score(pairingA)) ? pairingB : pairingA;
-    phases.push({ label: row.label, segs });
-  }
-  if (!phases.length) throw new Error('לא נמצאו פסי ירוק במופעים');
 
-  // -- pictures + their all-green windows -------------------------------------
+  // -- picture letters row + intersection number -------------------------------
   const letters = items.filter((it) => /^[A-Z]$/.test(it.s) && it.x > x0 - 6 && it.x < xEnd + 6).map((it) => ({ pic: it.s, t: mod(T(it.x)) }));
+  const interM = /צומת\s+מספר\s*:?\s*(\d+)/.exec(items.map((it) => it.s).join(' '));
+  const intersection = interM ? interM[1] : null;
+
+  // -- phase rows (vehicle digits / pedestrian a–z on the left margin) --------
+  // Parsed up-front (tolerantly) because the primary lines path also needs the
+  // green-bar edges, to tell picture intervals apart from intergreen ones.
+  function parsePhaseSegs() {
+    const rows = items
+      .filter((it) => (/^\d{1,2}$/.test(it.s) || /^[a-z]$/.test(it.s)) && it.x < x0 - 6)
+      .map((it) => ({ label: it.s, y: it.y }));
+    if (rows.length < 2) throw new Error('לא זוהו שורות מופעים');
+
+    // Inbar's layout (measured): start/end second-markers print ~10pt above the
+    // row label's baseline; duration numbers print ~1.3pt above it (inside the bar).
+    const phases = [];
+    for (const row of rows) {
+      const inRow = nums.filter((n) => n.x >= x0 - 6 && n.x <= xEnd + 6 && n.v <= cycle + 1);
+      const markers = inRow
+        .filter((n) => n.y - row.y > 6 && n.y - row.y < 15 && Math.abs(T(n.x) - n.v) < 3.5)
+        .sort((a, b) => a.v - b.v);
+      const durations = inRow
+        .filter((n) => n.y - row.y > -4 && n.y - row.y < 5)
+        .map((n) => ({ v: n.v, t: mod(T(n.x)) }));
+      if (markers.length < 2 || markers.length % 2 !== 0) continue;
+      const vals = markers.map((m) => m.v);
+      // Two possible pairings of the sorted markers (plain vs. one bar wrapping the
+      // cycle end). Score each: +1 when a pair's length matches a printed duration,
+      // +1 more when that duration number is physically printed INSIDE the pair's
+      // bar — the decisive hint when a bar is exactly half a cycle long.
+      const pairingA = [], pairingB = [];
+      for (let i = 0; i + 1 < vals.length; i += 2) pairingA.push([vals[i], vals[i + 1]]);
+      pairingB.push([vals[vals.length - 1], vals[0]]); // wrapped bar
+      for (let i = 1; i + 1 < vals.length; i += 2) pairingB.push([vals[i], vals[i + 1]]);
+      const insidePair = (t, p) => mod(t - p[0]) < mod(p[1] - p[0] || cycle);
+      const score = (pairs) => pairs.reduce((s, p) => {
+        const len = mod(p[1] - p[0]);
+        let best = 0;
+        for (const d of durations) {
+          if (Math.abs(d.v - len) <= 1) best = Math.max(best, insidePair(d.t, p) ? 2 : 1);
+        }
+        return s + best;
+      }, 0);
+      const segs = (durations.length && score(pairingB) > score(pairingA)) ? pairingB : pairingA;
+      phases.push({ label: row.label, segs });
+    }
+    if (!phases.length) throw new Error('לא נמצאו פסי ירוק במופעים');
+    return phases;
+  }
+  let phasesEarly = null;
+  try { phasesEarly = parsePhaseSegs(); } catch (e) { phasesEarly = null; }
+
+  // -- PRIMARY path: Inbar's own blue picture-boundary lines --------------------
+  // The interval between two consecutive lines that holds a picture letter IS
+  // that picture: left line = zinuk (+), right line = atsira (‡). Intervals
+  // without a letter are the intergreen transitions. A picture wrapping the
+  // cycle frame line at t=0 is printed with its letter in both fragments —
+  // those merge into one window. Verified to reproduce Inbar's own marks 1:1
+  // (צומת 66) and the official picture windows and K-transitions (צומת 64).
+  //
+  // Letter-overflow correction (צומת 72): a picture can be as short as 1s —
+  // narrower than its printed letter — so Inbar prints the letter NEXT TO the
+  // window, inside the adjacent intergreen interval. Green-bar edges tell the
+  // two apart: a picture interval never has a green start/end strictly inside
+  // it (any state change opens a new picture), an intergreen interval nearly
+  // always does. A letter that landed in a non-clean interval snaps to the
+  // nearest clean one (the letter glyph is only ~2s wide).
+  try {
+    const bxs = await extractInbarBoundaries(page);
+    let bts = bxs.map((x) => Math.round(T(x))).filter((t) => t >= 0 && t <= cycle);
+    bts = [...new Set(bts.map((t) => t % cycle))].sort((a, b) => a - b);
+    if (bts.length >= 3 && letters.length >= 2) {
+      const edges = phasesEarly
+        ? [...new Set([].concat.apply([], phasesEarly.map((p) => [].concat.apply([], p.segs))).map((v) => mod(v)))]
+        : null;
+      const EPS = 0.35;
+      const isClean = (a, len) =>
+        !edges || !edges.some((e) => { const d = mod(e - a); return d > EPS && d < len - EPS; });
+      const ivs = bts.map((t, i) => {
+        const b = bts[(i + 1) % bts.length];
+        const len = mod(b - t) || cycle;
+        return { a: t, b, len, clean: isClean(t, len) };
+      });
+      const byPic = {};
+      for (const L of letters) {
+        let iv = ivs.find((v) => mod(L.t - v.a) < v.len) || null;
+        if (iv && !iv.clean) {
+          // letter printed beside a too-narrow window — snap to nearest clean interval
+          let best = null, bestD = Infinity;
+          for (const v of ivs) {
+            if (!v.clean) continue;
+            const d = Math.min(mod(L.t - v.b), mod(v.a - L.t));
+            if (d < bestD) { bestD = d; best = v; }
+          }
+          if (best && bestD <= 3) iv = best;
+        }
+        if (!iv) continue;
+        if (!byPic[L.pic]) byPic[L.pic] = [];
+        if (!byPic[L.pic].some((q) => q.a === iv.a)) byPic[L.pic].push({ a: iv.a, b: iv.b });
+      }
+      const points = [];
+      for (const pic of Object.keys(byPic).sort()) {
+        let ivs2 = byPic[pic];
+        if (ivs2.length === 2) { // two fragments split by the frame line at t=0
+          const [p, q] = ivs2;
+          if (p.b === q.a) ivs2 = [{ a: p.a, b: q.b }];
+          else if (q.b === p.a) ivs2 = [{ a: q.a, b: p.b }];
+        }
+        ivs2.sort((u, v) => (mod(v.b - v.a) || cycle) - (mod(u.b - u.a) || cycle));
+        points.push({ pic, start: ivs2[0].a, stop: ivs2[0].b, window: mod(ivs2[0].b - ivs2[0].a) || cycle });
+      }
+      if (points.length >= 2 && points.every((p) => p.window > 0)) {
+        return { cycle, points, method: 'lines', intersection, skipped: [] };
+      }
+    }
+  } catch (e) { console.warn('Inbar boundary-line detection failed — falling back', e); }
+
+  const phases = phasesEarly || parsePhaseSegs();
+
+  // -- FALLBACK 1: official picture composition given ---------------------------
+  // The picture's window = the interval where ALL its member phases are green
+  // (intersection of the members' green segments on the cycle circle). This is
+  // Inbar's own definition — verified to reproduce Inbar's original +/‡ marks
+  // exactly on a genuine plan. Phases listed in the composition but absent from
+  // this diagram (e.g. a crossing Inbar chose not to draw) are skipped and
+  // reported. The letter row is only used to pick between runs when a member
+  // set happens to produce more than one all-green interval.
+  if (comp) {
+    const phaseMap = {};
+    for (const ph of phases) phaseMap[ph.label] = ph.segs;
+    const covers = (segs, t) => segs.some((sg) => mod(t - sg[0]) < (mod(sg[1] - sg[0]) || cycle));
+    const points = [], skipped = [];
+    for (const entry of comp) {
+      const present = entry.members.filter((mL) => phaseMap[mL]);
+      const missing = entry.members.filter((mL) => !phaseMap[mL]);
+      if (missing.length) skipped.push(entry.pic + ':' + missing.join(','));
+      if (!present.length) throw new Error('תמונה ' + entry.pic + ': אף מופע מההרכב לא נמצא בדיאגרמה (זמינים: ' + phases.map((p) => p.label).join(',') + ')');
+      // sample the middle of every second: covered iff all present members green
+      const ok = new Array(cycle);
+      for (let t = 0; t < cycle; t++) ok[t] = present.every((mL) => covers(phaseMap[mL], t + 0.5));
+      if (ok.every(Boolean)) throw new Error('תמונה ' + entry.pic + ': המופעים ירוקים כל המחזור — בדוק את ההרכב');
+      // maximal circular runs of covered seconds
+      const anchor = ok.findIndex((v) => !v);
+      const runs = []; let run = null;
+      for (let k = 1; k <= cycle; k++) {
+        const idx = (anchor + k) % cycle;
+        if (ok[idx]) { if (!run) run = { s: idx, n: 0 }; run.n++; }
+        else if (run) { runs.push(run); run = null; }
+      }
+      if (run) runs.push(run);
+      if (!runs.length) throw new Error('לתמונה ' + entry.pic + ' אין חלון שבו כל מופעיה ירוקים יחד — בדוק את ההרכב');
+      // prefer the run holding this picture's printed letter; otherwise the longest
+      const lts = letters.filter((L) => L.pic === entry.pic).map((L) => L.t);
+      const holds = (r) => lts.some((t) => mod(t - r.s) < r.n);
+      runs.sort((a, b) => (holds(b) - holds(a)) || (b.n - a.n));
+      const w = runs[0];
+      points.push({ pic: entry.pic, start: w.s % cycle, stop: (w.s + w.n) % cycle, window: w.n, members: present.length });
+    }
+    return { cycle, points, method: 'comp', intersection, skipped };
+  }
+
+  // -- FALLBACK 2 (heuristic): infer members from the letter position ----------
+  // Approximate: a leftover green from the previous picture that overlaps the
+  // letter's moment is mistaken for a member and can shrink the window. The
+  // official composition (above) is the accurate route.
   if (!letters.length) throw new Error('לא זוהתה שורת התמונות');
   const inSeg = (t, seg) => mod(t - seg[0]) < mod(seg[1] - seg[0] || cycle);
   const windows = {};
@@ -751,16 +991,31 @@ async function analyzeInbarPlan() {
     const stop = Math.round(mod(Math.floor(s + w.len))); // window end   (atsira)
     return { pic: p, start, stop, window: Math.round(w.len * 10) / 10, members: w.members };
   });
-  return { cycle, points };
+  return { cycle, points, method: 'letters', intersection, skipped: [] };
 }
 
 async function autoManualPoints() {
+  let comp = null;
+  try { comp = parseComposition(els.manualComp.value); }
+  catch (e) { toast(e.message, true); return; }
   showBusy('מנתח את התוכנית…');
   try {
-    const res = await analyzeInbarPlan();
+    const res = await analyzeInbarPlan(comp);
     els.manualPoints.value = res.points.map((p) => p.pic + ':' + p.start + '/' + p.stop).join(', ');
-    toast('מחזור ' + res.cycle + ' שנ׳ — חושבו ' + res.points.length + ' תמונות (חלונות: ' +
-      res.points.map((p) => p.pic + '=' + p.window + 's').join(', ') + '). בדוק ולחץ "סמן".');
+    // remember this intersection's composition for next time
+    if (comp && res.intersection) {
+      try { localStorage.setItem('pw.inbarComp.' + res.intersection, els.manualComp.value.trim()); } catch (e) {}
+    }
+    const windows = res.points.map((p) => p.pic + '=' + p.window + 's').join(', ');
+    if (res.method === 'lines') {
+      toast('מחזור ' + res.cycle + ' שנ׳ — נקרא מקווי גבולות התמונות של ענבר (חלונות: ' + windows + '). בדוק ולחץ "סמן".');
+    } else if (res.method === 'comp') {
+      toast('מחזור ' + res.cycle + ' שנ׳ — קווי הגבולות לא זוהו; חושב לפי הרכב התמונות (חלונות: ' + windows + ')' +
+        (res.skipped.length ? '. מופעים שאינם בדיאגרמה דולגו: ' + res.skipped.join(' ') : '') + '. בדוק ולחץ "סמן".');
+    } else {
+      toast('מחזור ' + res.cycle + ' שנ׳ — קווי הגבולות לא זוהו; חישוב משוער לפי מיקום האותיות (חלונות: ' + windows +
+        '). מומלץ לבדוק מול התוכנית. בדוק ולחץ "סמן".', true);
+    }
   } catch (e) { console.error(e); toast(e.message, true); }
   finally { hideBusy(); }
 }
@@ -769,6 +1024,19 @@ function openManualModal() {
   els.manualPoints.value = '';
   els.manualModal.hidden = false;
   els.manualPoints.focus();
+  // Prefill the saved picture composition for this intersection (best-effort).
+  els.manualComp.value = '';
+  (async () => {
+    try {
+      const page = await state.pdfDoc.getPage(state.pageIndex + 1);
+      const tc = await page.getTextContent();
+      const m = /צומת\s+מספר\s*:?\s*(\d+)/.exec(tc.items.map((i) => (i.str || '').trim()).filter(Boolean).join(' '));
+      if (m) {
+        const saved = localStorage.getItem('pw.inbarComp.' + m[1]);
+        if (saved && !els.manualComp.value) els.manualComp.value = saved;
+      }
+    } catch (e) {}
+  })();
 }
 
 async function doManualOps() {
@@ -778,14 +1046,23 @@ async function doManualOps() {
   els.manualModal.hidden = true;
   showBusy('Marking manual-operation points…');
   try {
-    const { cal, manualY } = await calibrateInbarPlan();
+    const { cal, manualY, botAxisY } = await calibrateInbarPlan();
     const sizes = await ops.getPageSizes(PDFLib, state.bytes);
     const H = sizes[state.pageIndex].height;
     // Inbar A4 defaults, measured from Inbar 16 output:
     const x0 = cal ? cal.x0 : 79.32;
     const scale = cal ? cal.scale : 3.0609;
-    // Text baseline sits ~2.5pt under the symbols' center on Inbar's row.
-    const y = manualY != null ? manualY + 2.5 : H - 575.6;
+    // Vertical placement of the symbols' centre on the ידני.ת row. Best: the
+    // label baseline + 2.5pt — Inbar's own +/‡ vector geometry puts the symbol
+    // centre 2.47pt above the label baseline (extracted from genuine Inbar 16
+    // output). The row floats with the phase count, so when the label can't be
+    // read we anchor 86pt above the detected bottom time-axis (holds across
+    // layouts to ~±4pt), and only if there is no axis either do we fall back to
+    // Inbar's standard A4 row height.
+    let y, yApprox = false;
+    if (manualY != null) y = manualY + 2.5;
+    else if (botAxisY != null) { y = botAxisY + 86; yApprox = true; }
+    else { y = H - 575.6; yApprox = true; }
     const mk = (kind, t) => ({
       id: 'man' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       page: state.pageIndex, x: x0 + scale * t, y, kind,
@@ -797,7 +1074,14 @@ async function doManualOps() {
     state.selectedAnnId = null;
     renderAnnObjects();
     els.undo.disabled = state.undo.length === 0;
-    toast('Marked ' + pts.length + ' picture(s)' + (cal ? ' (axis auto-detected)' : ' (standard Inbar layout)') + ' — deletable until saved');
+    // Tell the engineer exactly how each axis was resolved, so approximate
+    // placements (fallbacks) get a manual check before the plan is saved.
+    const xNote = cal ? 'ציר זמן זוהה' : 'ציר לא זוהה — פריסת ברירת מחדל';
+    const yNote = manualY != null ? 'שורת ידני.ת זוהתה'
+      : botAxisY != null ? 'שורת ידני.ת משוערת (יחסית לציר) — בדוק'
+      : 'שורת ידני.ת לא זוהתה — בדוק';
+    toast('סומנו ' + pts.length + ' תמונות (' + xNote + '; ' + yNote + ') — ניתן למחוק עד לשמירה',
+      (!cal || yApprox));
   } catch (e) { console.error(e); toast(e.message, true); }
   finally { hideBusy(); }
 }
