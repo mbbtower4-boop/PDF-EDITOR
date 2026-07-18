@@ -359,6 +359,103 @@
     return doc.save();
   }
 
+  // ---- DOCX (Word) export ---------------------------------------------------
+  // Build a minimal, valid .docx entirely in-memory: a .docx is just a ZIP of
+  // XML parts. This produces an editable Word document from extracted text —
+  // paragraph structure and right-to-left direction are preserved; pixel-exact
+  // layout (tables/positions/images) is not, which no client-only converter can
+  // do reliably. No dependencies: a tiny CRC32 + a STORE-method (uncompressed)
+  // ZIP writer, which Word opens fine.
+  let CRC_TABLE = null;
+  function crc32(bytes) {
+    if (!CRC_TABLE) {
+      CRC_TABLE = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        CRC_TABLE[n] = c >>> 0;
+      }
+    }
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i++) crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ bytes[i]) & 0xFF];
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+  function zipStore(files) { // files: [{ name, data: Uint8Array }]
+    const u16 = (n) => [n & 255, (n >> 8) & 255];
+    const u32 = (n) => [n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255];
+    const enc = new TextEncoder();
+    const chunks = [];
+    const central = [];
+    let offset = 0;
+    for (const f of files) {
+      const nameB = enc.encode(f.name);
+      const crc = crc32(f.data);
+      const size = f.data.length;
+      const local = new Uint8Array([].concat(
+        u32(0x04034b50), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
+        u32(crc), u32(size), u32(size), u16(nameB.length), u16(0)
+      ));
+      chunks.push(local, nameB, f.data);
+      const cen = new Uint8Array([].concat(
+        u32(0x02014b50), u16(20), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
+        u32(crc), u32(size), u32(size), u16(nameB.length), u16(0), u16(0), u16(0), u16(0),
+        u32(0), u32(offset)
+      ));
+      central.push({ cen, nameB });
+      offset += local.length + nameB.length + size;
+    }
+    const cdStart = offset;
+    let cdSize = 0;
+    for (const c of central) { chunks.push(c.cen, c.nameB); cdSize += c.cen.length + c.nameB.length; }
+    const eocd = new Uint8Array([].concat(
+      u32(0x06054b50), u16(0), u16(0), u16(central.length), u16(central.length),
+      u32(cdSize), u32(cdStart), u16(0)
+    ));
+    chunks.push(eocd);
+    let total = 0;
+    for (const c of chunks) total += c.length;
+    const out = new Uint8Array(total);
+    let p = 0;
+    for (const c of chunks) { out.set(c, p); p += c.length; }
+    return out;
+  }
+  // paragraphs: [{ text, rtl } | { pageBreak: true }]
+  function buildDocx(paragraphs) {
+    const enc = new TextEncoder();
+    const esc = (s) => String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      // strip characters that are illegal in XML 1.0 (control chars except tab/newlines)
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+    const body = (paragraphs || []).map((p) => {
+      if (p && p.pageBreak) return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+      const t = esc(p && p.text != null ? p.text : '');
+      const pPr = (p && p.rtl) ? '<w:pPr><w:bidi/></w:pPr>' : '';
+      const rPr = (p && p.rtl) ? '<w:rPr><w:rtl/></w:rPr>' : '';
+      if (!t) return '<w:p>' + pPr + '</w:p>';
+      return '<w:p>' + pPr + '<w:r>' + rPr + '<w:t xml:space="preserve">' + t + '</w:t></w:r></w:p>';
+    }).join('');
+    const documentXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>'
+      + body
+      + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>'
+      + '</w:body></w:document>';
+    const contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+      + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+      + '<Default Extension="xml" ContentType="application/xml"/>'
+      + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+      + '</Types>';
+    const rels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+      + '</Relationships>';
+    return zipStore([
+      { name: '[Content_Types].xml', data: enc.encode(contentTypes) },
+      { name: '_rels/.rels', data: enc.encode(rels) },
+      { name: 'word/document.xml', data: enc.encode(documentXml) },
+    ]);
+  }
+
   // Apply a whole batch of edits in one save (renderer uses this on export).
   async function applyEdits(PDFLib, bytes, edits) {
     let b = toBytes(bytes);
@@ -392,5 +489,6 @@
     // text helpers (exported mainly for tests)
     needsUnicodeFont,
     toVisualRtl,
+    buildDocx,
   };
 });

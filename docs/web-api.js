@@ -95,6 +95,7 @@
       case 'png': return 'image/png';
       case 'jpg':
       case 'jpeg': return 'image/jpeg';
+      case 'docx': return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
       default: return 'application/octet-stream';
     }
   }

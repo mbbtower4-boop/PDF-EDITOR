@@ -1,5 +1,8 @@
 # Paperweight — Changelog
 
+## v1.16.0 — 2026-07-14
+- **Convert a PDF to Word (.docx).** New button in the **Extract** panel: "Convert to Word (.docx)…". It extracts the PDF's text into an editable Word document — paragraph structure and **right-to-left (Hebrew)** direction are preserved. It is a text conversion, not a pixel-exact layout clone (no client-only tool can reproduce tables/positions/images reliably), and scanned PDFs with no text layer have nothing to convert. Built entirely in-browser (a tiny CRC32 + STORE-method ZIP writer assembles the .docx); nothing is uploaded. Verified end-to-end (Word/LibreOffice opens the output; Hebrew, RTL runs, page breaks and XML-escaping all correct) and covered by 10 new engine tests.
+
 ## v1.15.1 — 2026-07-13
 - **Signal plan (צומת 72): letter-overflow fix — every picture now gets its exact start/stop, including 1-second pictures.** On the 72 plans, picture D's window is a single second (e.g. 37→38): the printed letter is wider than its own window, so Inbar prints it just outside, inside the neighbouring intergreen interval — and the letter-to-interval pairing picked that wrong interval (D came out as 38/0, or swallowed the whole transition). The analyzer now parses the phase green-bars up front and classifies each between-lines interval as *picture* (no green edge strictly inside it) or *intergreen* (has one); a letter that landed in an intergreen interval snaps to the nearest picture interval. Verified on all nine צומת-72 plans (תוכניות 0–8: shefel/peak/clearance, cycles 47–120, including wrapped rest-windows like A:74/6 and long rests like C:24/103) and regression-checked 1:1 against Inbar's own printed marks on צומת 66.
 

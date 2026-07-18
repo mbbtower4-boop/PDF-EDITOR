@@ -80,7 +80,7 @@ const els = {
   dropHint: $('dropHint'),
   appVersion: $('appVersion'),
   textSel: $('textLayer'),
-  copyText: $('btnCopyText'), saveText: $('btnSaveText'),
+  copyText: $('btnCopyText'), saveText: $('btnSaveText'), saveWord: $('btnSaveWord'),
   scanImgs: $('btnScanImgs'), extractImgs: $('extractImgs'),
 };
 
@@ -2401,6 +2401,39 @@ async function saveAllText() {
   } catch (e) { toast(e.message, true); } finally { hideBusy(); }
 }
 
+// ---- Convert to Word (.docx) ----------------------------------------------
+// Extracts the PDF's text into an editable Word document. Paragraph structure
+// and right-to-left direction (Hebrew) are preserved; exact layout is not (no
+// client-only converter can reliably reproduce tables/positions/images). Scans
+// with no text layer have nothing to extract.
+const HEB_AR = /[֐-׿؀-ۿ]/;
+async function exportToWord() {
+  if (!state.pdfDoc) { toast('Open a PDF first', true); return; }
+  showBusy('Converting to Word…');
+  try {
+    const paras = [];
+    let anyText = false;
+    for (let i = 1; i <= state.pageCount; i++) {
+      if (i > 1) paras.push({ pageBreak: true });
+      const page = await state.pdfDoc.getPage(i);
+      const text = textFromContent(await page.getTextContent());
+      for (const raw of text.split('\n')) {
+        const line = raw.replace(/[ \t]+$/, '');
+        if (line.trim()) anyText = true;
+        paras.push({ text: line, rtl: HEB_AR.test(line) });
+      }
+    }
+    if (!anyText) {
+      toast('No selectable text found — a scanned PDF has no text layer to convert', true);
+      return;
+    }
+    const bytes = ops.buildDocx(paras);
+    const suggested = state.name.replace(/\.pdf$/i, '') + '.docx';
+    const saved = await window.api.saveFile(bytes, suggested, 'Word document', ['docx']);
+    if (saved) toast('Saved ' + saved.split(/[\\/]/).pop());
+  } catch (e) { toast(e.message, true); } finally { hideBusy(); }
+}
+
 // ---- Extraction: embedded images -------------------------------------------
 // Convert a pdf.js image object ({width,height,data,kind} or {bitmap}) to a canvas.
 function pdfjsImageToCanvas(img) {
@@ -2519,6 +2552,7 @@ function addExtractedToPage(pngBytes, wPx, hPx) {
 
 els.copyText.addEventListener('click', copyPageText);
 els.saveText.addEventListener('click', saveAllText);
+if (els.saveWord) els.saveWord.addEventListener('click', exportToWord);
 els.scanImgs.addEventListener('click', scanPageImages);
 
 // Show the app version in the status bar.

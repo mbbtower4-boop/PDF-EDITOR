@@ -192,6 +192,38 @@ async function pageCount(bytes) {
   check('stampText embeds Hebrew (valid pdf, 3 pages)', (await pageCount(heStamped)) === 3);
   check('stampText Hebrew grew the file (font subset embedded)', heStamped.length > a.length + 2000);
 
+  // ---- DOCX (Word) export ---------------------------------------------------
+  const docx = ops.buildDocx([
+    { text: 'Hello World', rtl: false },
+    { text: '', rtl: false },
+    { text: 'אזור עבודות דיפו', rtl: true },
+    { pageBreak: true },
+    { text: 'a < b & c > d', rtl: false },
+  ]);
+  check('buildDocx returns bytes', docx instanceof Uint8Array && docx.length > 400);
+  check('buildDocx is a zip (PK magic)', docx[0] === 0x50 && docx[1] === 0x4b && docx[2] === 3 && docx[3] === 4);
+  // parse EOCD -> exactly 3 parts
+  const dv = new DataView(docx.buffer, docx.byteOffset, docx.byteLength);
+  let eocd = -1;
+  for (let i = docx.length - 22; i >= 0; i--) { if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; } }
+  check('buildDocx EOCD present', eocd >= 0);
+  check('buildDocx has 3 zip entries', eocd >= 0 && dv.getUint16(eocd + 10, true) === 3);
+  // inspect document.xml text (stored/uncompressed, so it's plain in the bytes)
+  const whole = Buffer.from(docx).toString('utf8');
+  check('docx contains word/document.xml', whole.includes('word/document.xml'));
+  check('docx contains the Hebrew text', whole.includes('אזור עבודות דיפו'));
+  check('docx marks RTL paragraph', whole.includes('<w:bidi/>') && whole.includes('<w:rtl/>'));
+  check('docx has a page break', whole.includes('w:type="page"'));
+  check('docx escapes XML specials', whole.includes('a &lt; b &amp; c &gt; d'));
+  // CRC check on the first (stored) entry: header crc must match crc of its data
+  const nameLen = dv.getUint16(26, true);
+  const dataStart = 30 + nameLen;
+  const size = dv.getUint32(18, true);
+  const storedCrc = dv.getUint32(14, true);
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < size; i++) { let c = (crc ^ docx[dataStart + i]) & 0xFF; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); crc = (crc >>> 8) ^ c; }
+  check('docx first entry CRC32 is correct', ((crc ^ 0xFFFFFFFF) >>> 0) === storedCrc);
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('THREW:', e); process.exit(1); });
