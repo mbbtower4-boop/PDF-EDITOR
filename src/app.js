@@ -2424,7 +2424,20 @@ async function exportToWord() {
       }
     }
     if (!anyText) {
-      toast('No selectable text found — a scanned PDF has no text layer to convert', true);
+      // Distinguish the common case for a clearer message: pages that are just
+      // one big raster image (scan / flattened export) vs. genuinely empty.
+      let looksScanned = false;
+      try {
+        const p1 = await state.pdfDoc.getPage(state.pageIndex + 1);
+        const opl = await p1.getOperatorList();
+        const O = pdfjsLib.OPS;
+        let imgs = 0;
+        for (const fn of opl.fnArray) if (fn === O.paintImageXObject || fn === O.paintInlineImageXObject || fn === O.paintImageMaskXObject) imgs++;
+        looksScanned = imgs > 0;
+      } catch (e) {}
+      toast(looksScanned
+        ? 'This PDF\'s pages are pictures (a scan / flattened export) — there is no text layer to convert. OCR would be required.'
+        : 'No selectable text found in this PDF', true);
       return;
     }
     const bytes = ops.buildDocx(paras);

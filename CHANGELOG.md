@@ -1,5 +1,8 @@
 # Paperweight — Changelog
 
+## v1.16.1 — 2026-07-14
+- **Clearer message when Word conversion finds no text.** If the pages are raster images (a scan or a flattened export — e.g. review PDFs where each page is one picture), the toast now says exactly that and that OCR would be required, instead of the generic "no text" line.
+
 ## v1.16.0 — 2026-07-14
 - **Convert a PDF to Word (.docx).** New button in the **Extract** panel: "Convert to Word (.docx)…". It extracts the PDF's text into an editable Word document — paragraph structure and **right-to-left (Hebrew)** direction are preserved. It is a text conversion, not a pixel-exact layout clone (no client-only tool can reproduce tables/positions/images reliably), and scanned PDFs with no text layer have nothing to convert. Built entirely in-browser (a tiny CRC32 + STORE-method ZIP writer assembles the .docx); nothing is uploaded. Verified end-to-end (Word/LibreOffice opens the output; Hebrew, RTL runs, page breaks and XML-escaping all correct) and covered by 10 new engine tests.
 
