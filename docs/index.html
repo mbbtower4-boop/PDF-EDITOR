@@ -1,13 +1,13 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob: data:; font-src 'self';" />
-  <meta name="app-version" content="1.16.1" />
+        content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob: data:; font-src 'self';" />
+  <meta name="app-version" content="1.17.0" />
   <meta name="theme-color" content="#12151b" />
-  <title>Paperweight â€” online PDF editor</title>
+  <title>Paperweight — online PDF editor</title>
   <link rel="icon" href="assets/paperweight.ico" />
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -71,7 +71,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8 8l12 8"/><path d="M8 16l12-8"/></svg>
         Extract
       </button>
-      <button id="btnManualOp" class="tbtn ghost" title="Mark manual-operation points on an Inbar signal timing plan (×¡×™×ž×•×Ÿ ×ª×¤×¢×•×œ ×™×“× ×™)" disabled>
+      <button id="btnManualOp" class="tbtn ghost" title="Mark manual-operation points on an Inbar signal timing plan (סימון תפעול ידני)" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v4"/><path d="M12 17v4"/><path d="M3 12h4"/><path d="M17 12h4"/></svg>
         Signal plan
       </button>
@@ -80,8 +80,8 @@
     <div class="spacer"></div>
 
     <div class="tbgroup zoom">
-      <button id="btnZoomOut" class="tbtn icon" title="Zoom out" disabled>âˆ’</button>
-      <input id="zoomInput" class="zoom-input" type="text" inputmode="numeric" value="100" title="Zoom % â€” type a number (30â€“300) and press Enter" disabled /><span class="muted">%</span>
+      <button id="btnZoomOut" class="tbtn icon" title="Zoom out" disabled>−</button>
+      <input id="zoomInput" class="zoom-input" type="text" inputmode="numeric" value="100" title="Zoom % — type a number (30–300) and press Enter" disabled /><span class="muted">%</span>
       <button id="btnZoomIn" class="tbtn icon" title="Zoom in" disabled>+</button>
     </div>
     <button id="btnUndo" class="tbtn ghost" title="Undo (Ctrl+Z)" disabled>
@@ -102,9 +102,9 @@
       </div>
       <div id="selBar" class="sel-bar" hidden>
         <span id="selCount" class="sel-count">0 selected</span>
-        <button id="selMove" class="tbtn" title="Move the selected pages to a positionâ€¦">Moveâ€¦</button>
+        <button id="selMove" class="tbtn" title="Move the selected pages to a position…">Move…</button>
         <button id="selDelete" class="tbtn danger" title="Delete the selected pages (Delete)">Delete</button>
-        <button id="selClear" class="tbtn ghost icon" title="Clear selection">âœ•</button>
+        <button id="selClear" class="tbtn ghost icon" title="Clear selection">✕</button>
         <input id="selMoveInput" class="text-input sel-move-input" type="text" inputmode="numeric"
                placeholder="Move to page #, then Enter" hidden />
       </div>
@@ -118,13 +118,13 @@
         <div class="empty-card">
           <span class="empty-mark" aria-hidden="true"></span>
           <h1>Open a PDF to get started</h1>
-          <p>View it, mark it up, add text, fill its form, sign it, and reshape its pages â€” all right here in your browser.</p>
+          <p>View it, mark it up, add text, fill its form, sign it, and reshape its pages — all right here in your browser.</p>
           <div class="empty-cta">
             <button id="btnOpen2" class="tbtn primary">Open a PDF</button>
           </div>
           <div class="privacy-chip">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
-            Your files never leave your device â€” everything happens in this browser tab.
+            Your files never leave your device — everything happens in this browser tab.
           </div>
         </div>
       </div>
@@ -162,10 +162,10 @@
           <p class="small muted">With the Hand tool you can also select text directly on the page and copy with Ctrl+C.</p>
           <div class="extract-actions">
             <button id="btnCopyText" class="tbtn full">Copy this page's text</button>
-            <button id="btnSaveText" class="tbtn full">Save all text (.txt)â€¦</button>
-            <button id="btnSaveWord" class="tbtn full">Convert to Word (.docx)â€¦</button>
+            <button id="btnSaveText" class="tbtn full">Save all text (.txt)…</button>
+            <button id="btnSaveWord" class="tbtn full">Convert to Word (.docx)…</button>
           </div>
-          <p class="small muted" style="margin:-8px 0 14px">Word export extracts the <b>editable text</b> (Hebrew &amp; RTL supported) â€” not an exact-layout copy. Scanned PDFs have no text to convert.</p>
+          <p class="small muted" style="margin:-8px 0 14px">Word export extracts the <b>editable text</b> (Hebrew &amp; RTL supported) — not an exact-layout copy. For <b>scanned PDFs</b> it offers built-in <b>OCR</b> (Hebrew + English, fully offline).</p>
           <h3>Images on this page</h3>
           <button id="btnScanImgs" class="tbtn full">Scan this page for images</button>
           <div id="extractImgs" class="extract-imgs"></div>
@@ -173,17 +173,17 @@
         <div class="ptab-pane" data-pane="about">
           <h3>Quick guide</h3>
           <ul class="guide">
-            <li><b>Highlight / Pen</b> â€” drag on the page. Each has preset colors plus a rainbow chip for any custom color. With the <b>Hand</b> tool, click a highlight or stroke to select it: drag to move, âœ• or Delete to erase, corners resize a highlight.</li>
-            <li><b>Text</b> â€” click, type, then Enter. <b>Hebrew and other languages are supported</b> (right-to-left is handled automatically). To change the words later: with the <b>Text</b> tool click the text and retype, or with the <b>Hand</b> tool double-click it. Select it with the <b>Hand</b> tool to <b>change its colour or size</b> from the bar at the top; Hand tool also moves it and resizes by the corners.</li>
-            <li><b>Image</b> â€” <b>drag an image file straight onto the page</b>, or use the Image tool and drag a box. With the <b>Hand</b> tool, drag to move or use the corners to resize.</li>
-            <li><b>Sign</b> â€” draw a signature once, then click on the page to place it.</li>
-            <li><b>Move around</b> â€” drag the page with the <b>Hand</b> tool, or hold the <b>right mouse button</b> with any tool. <b>Ctrl + wheel</b> zooms.</li>
-            <li><b>Pages</b> â€” drag thumbnails to reorder, or use a thumbnail's <b>â‡…</b> to jump it to any page number. Each has rotate &amp; delete. <b>Ctrl+click</b> (or Shift+click) thumbnails to select several pages, then move them together (drag or "Moveâ€¦") or delete them in one go.</li>
-            <li><b>Insert PDF</b> adds other PDFs at the beginning, end, or after a chosen page â€” you can pick <b>several files at once</b> in the dialog, or simply <b>drop PDF files onto the window</b> to append them.</li>
+            <li><b>Highlight / Pen</b> — drag on the page. Each has preset colors plus a rainbow chip for any custom color. With the <b>Hand</b> tool, click a highlight or stroke to select it: drag to move, ✕ or Delete to erase, corners resize a highlight.</li>
+            <li><b>Text</b> — click, type, then Enter. <b>Hebrew and other languages are supported</b> (right-to-left is handled automatically). To change the words later: with the <b>Text</b> tool click the text and retype, or with the <b>Hand</b> tool double-click it. Select it with the <b>Hand</b> tool to <b>change its colour or size</b> from the bar at the top; Hand tool also moves it and resizes by the corners.</li>
+            <li><b>Image</b> — <b>drag an image file straight onto the page</b>, or use the Image tool and drag a box. With the <b>Hand</b> tool, drag to move or use the corners to resize.</li>
+            <li><b>Sign</b> — draw a signature once, then click on the page to place it.</li>
+            <li><b>Move around</b> — drag the page with the <b>Hand</b> tool, or hold the <b>right mouse button</b> with any tool. <b>Ctrl + wheel</b> zooms.</li>
+            <li><b>Pages</b> — drag thumbnails to reorder, or use a thumbnail's <b>⇅</b> to jump it to any page number. Each has rotate &amp; delete. <b>Ctrl+click</b> (or Shift+click) thumbnails to select several pages, then move them together (drag or "Move…") or delete them in one go.</li>
+            <li><b>Insert PDF</b> adds other PDFs at the beginning, end, or after a chosen page — you can pick <b>several files at once</b> in the dialog, or simply <b>drop PDF files onto the window</b> to append them.</li>
             <li><b>Extract</b> saves a page range to a new file.</li>
           </ul>
           <h3>Private by design</h3>
-          <p class="small muted">Your PDFs are opened, edited, and saved entirely in this browser â€” nothing is ever uploaded. This tool <b>adds</b> text as overlays; it does not rewrite text already inside the PDF. "Sign" places a visible signature image, not a cryptographic digital signature.</p>
+          <p class="small muted">Your PDFs are opened, edited, and saved entirely in this browser — nothing is ever uploaded. This tool <b>adds</b> text as overlays; it does not rewrite text already inside the PDF. "Sign" places a visible signature image, not a cryptographic digital signature.</p>
         </div>
       </div>
     </aside>
@@ -192,7 +192,7 @@
   <!-- Status bar -------------------------------------------------------- -->
   <footer class="statusbar">
     <span id="appVersion" class="muted"></span>
-    <span id="docName" class="muted">â€”</span>
+    <span id="docName" class="muted">—</span>
     <span class="spacer"></span>
     <span class="goto"><input id="gotoPage" class="goto-input" type="text" inputmode="numeric" disabled /> <span id="pageTotal" class="muted"></span></span>
     <span id="toolStatus" class="muted"></span>
@@ -222,7 +222,7 @@
       <div class="modal-actions">
         <span class="spacer"></span>
         <button id="rangeCancel" class="tbtn">Cancel</button>
-        <button id="rangeGo" class="tbtn primary">Save selectionâ€¦</button>
+        <button id="rangeGo" class="tbtn primary">Save selection…</button>
       </div>
     </div>
   </div>
@@ -230,20 +230,20 @@
   <!-- Manual-operation (Inbar signal plan) modal ----------------------- -->
   <div id="manualModal" class="modal" hidden>
     <div class="modal-card" dir="rtl">
-      <h2>×¡×™×ž×•×Ÿ ×ª×¤×¢×•×œ ×™×“× ×™ â€” ×ª×•×›× ×™×ª ×–×ž× ×™× ×©×œ ×¢× ×‘×¨</h2>
-      <p class="small muted">×œ×›×œ ×ª×ž×•× ×”: <code dir="ltr">××•×ª:×©× ×™×™×ª_×–×™× ×•×§/×©× ×™×™×ª_×¢×¦×™×¨×”</code>, ×ž×•×¤×¨×“ ×‘×¤×¡×™×§×™×. ×”×¡×™×ž×•×Ÿ × ×¢×©×” ×¢×œ <b>×”×¢×ž×•×“ ×”× ×•×›×—×™</b>, ×‘×¡×ž×œ×™× ×”×ž×§×•×¨×™×™× ×©×œ ×¢× ×‘×¨ (+ = ×–×™× ×•×§, â€¡ = ×¢×¦×™×¨×”) ×‘×©×•×¨×ª ×™×“× ×™.×ª.</p>
+      <h2>סימון תפעול ידני — תוכנית זמנים של ענבר</h2>
+      <p class="small muted">לכל תמונה: <code dir="ltr">אות:שניית_זינוק/שניית_עצירה</code>, מופרד בפסיקים. הסימון נעשה על <b>העמוד הנוכחי</b>, בסמלים המקוריים של ענבר (+ = זינוק, ‡ = עצירה) בשורת ידני.ת.</p>
       <input id="manualPoints" class="text-input" type="text" dir="ltr" placeholder="A:87/90, B:11/13, C:32/35, D:74/76" />
-      <p class="small muted" style="margin-bottom:4px">âš¡ ×§×•×¨× ××ª ×”× ×§×•×“×•×ª ×™×©×™×¨×•×ª ×ž<b>×§×•×•×™ ×’×‘×•×œ×•×ª ×”×ª×ž×•× ×•×ª ×”×›×—×•×œ×™×</b> ×©×¢× ×‘×¨ ×ž×¦×™×™×¨×ª ×‘×“×™××’×¨×ž×”. ×”×¨×›×‘ ×ª×ž×•× ×•×ª (××•×¤×¦×™×•× ×œ×™, × ×©×ž×¨ ×œ×¦×•×ž×ª) ×ž×©×ž×© ×’×™×‘×•×™ ×œ×¢×ž×•×“×™× ×©×‘×”× ×”×§×•×•×™× ××™× × × ×™×ª× ×™× ×œ×§×¨×™××”.</p>
+      <p class="small muted" style="margin-bottom:4px">⚡ קורא את הנקודות ישירות מ<b>קווי גבולות התמונות הכחולים</b> שענבר מציירת בדיאגרמה. הרכב תמונות (אופציונלי, נשמר לצומת) משמש גיבוי לעמודים שבהם הקווים אינם ניתנים לקריאה.</p>
       <input id="manualComp" class="text-input" type="text" dir="ltr" placeholder="A: 1,b,c,e,g | B: 3,a,c,f,g | C: 4,a,c,e,h | D: a,b,c,d,e,f,g,h" />
       <div class="modal-actions">
-        <button id="manualAuto" class="tbtn" title="×§×¨×™××ª ×”×“×™××’×¨×ž×” ×•×—×™×©×•×‘ ×”× ×§×•×“×•×ª ××•×˜×•×ž×˜×™×ª ×œ×¤×™ ×›×œ×œ×™ ×”×ª×›× ×•×Ÿ">âš¡ ×—×©×‘ ××•×˜×•×ž×˜×™×ª ×ž×”×ª×•×›× ×™×ª</button>
-        <button id="manualClear" class="tbtn" title="×ž×—×™×§×ª ×”×¡×™×ž×•× ×™× ×©×”××¤×œ×™×§×¦×™×” ×”×•×¡×™×¤×” ×‘×’×œ×™×•×Ÿ ×”× ×•×›×—×™ ×‘×œ×‘×“ (×¢×“×™×™×Ÿ ×œ× × ×©×ž×¨×• ×‘×§×•×‘×¥)">ðŸ—‘ ×ž×—×§ ×¡×™×ž×•× ×™× ×‘×’×œ×™×•×Ÿ</button>
+        <button id="manualAuto" class="tbtn" title="קריאת הדיאגרמה וחישוב הנקודות אוטומטית לפי כללי התכנון">⚡ חשב אוטומטית מהתוכנית</button>
+        <button id="manualClear" class="tbtn" title="מחיקת הסימונים שהאפליקציה הוסיפה בגליון הנוכחי בלבד (עדיין לא נשמרו בקובץ)">🗑 מחק סימונים בגליון</button>
         <span class="spacer"></span>
-        <button id="manualCancel" class="tbtn">×‘×™×˜×•×œ</button>
-        <button id="manualGo" class="tbtn primary">×¡×ž×Ÿ ×¢×œ ×”×¢×ž×•×“</button>
+        <button id="manualCancel" class="tbtn">ביטול</button>
+        <button id="manualGo" class="tbtn primary">סמן על העמוד</button>
       </div>
-      <p class="small muted">×¦×™×¨ ×”×–×ž×Ÿ ×•×©×•×¨×ª ×™×“× ×™.×ª ×ž×–×•×”×™× ××•×˜×•×ž×˜×™×ª ×ž×ª×•×›×Ÿ ×”×¢×ž×•×“; ×× ×”×–×™×”×•×™ × ×›×©×œ × ×¢×©×” ×©×™×ž×•×© ×‘×¤×¨×™×¡×ª ×¢× ×‘×¨ ×”×¡×˜× ×“×¨×˜×™×ª (A4).</p>
-      <p class="small muted">×”×¡×™×ž×•× ×™× × ×©××¨×™× <b>× ×™×ª× ×™× ×œ×¢×¨×™×›×”</b> ×¢×“ ×”×©×ž×™×¨×”: ×œ×—×™×¦×” ×¢× ×›×œ×™ ×”×™×“ ×‘×•×—×¨×ª ×¡×™×ž×Ÿ â€” <b>âœ•</b> ××• Delete ×ž×•×—×§×™×, ×•×—×¦×™× ×ž×–×™×–×™×. ×—×™×©×•×‘ ×ž×—×“×© ×ž×—×œ×™×£ ××ª ×”×¡×™×ž×•× ×™× ×‘×¢×ž×•×“. "ðŸ—‘ ×ž×—×§ ×¡×™×ž×•× ×™× ×‘×’×œ×™×•×Ÿ" ×ž×•×—×§ ××ª ×›×œ ×”×¡×™×ž×•× ×™× <b>×‘×’×œ×™×•×Ÿ ×”× ×•×›×—×™ ×‘×œ×‘×“</b>. Ctrl+Z ×œ×‘×™×˜×•×œ. ×œ××—×¨ ×©×ž×™×¨×” ×”×¡×™×ž×•× ×™× ×”×•×¤×›×™× ×œ×—×œ×§ ×ž×”×¢×ž×•×“.</p>
+      <p class="small muted">ציר הזמן ושורת ידני.ת מזוהים אוטומטית מתוכן העמוד; אם הזיהוי נכשל נעשה שימוש בפריסת ענבר הסטנדרטית (A4).</p>
+      <p class="small muted">הסימונים נשארים <b>ניתנים לעריכה</b> עד השמירה: לחיצה עם כלי היד בוחרת סימן — <b>✕</b> או Delete מוחקים, וחצים מזיזים. חישוב מחדש מחליף את הסימונים בעמוד. "🗑 מחק סימונים בגליון" מוחק את כל הסימונים <b>בגליון הנוכחי בלבד</b>. Ctrl+Z לביטול. לאחר שמירה הסימונים הופכים לחלק מהעמוד.</p>
     </div>
   </div>
 
@@ -251,7 +251,7 @@
   <div id="insertModal" class="modal" hidden>
     <div class="modal-card">
       <h2>Insert PDF pages</h2>
-      <p class="small muted">Where should the inserted pages go? In the file dialog you can <b>select several PDFs at once</b> (Ctrl+click) â€” they are inserted together, in order.</p>
+      <p class="small muted">Where should the inserted pages go? In the file dialog you can <b>select several PDFs at once</b> (Ctrl+click) — they are inserted together, in order.</p>
       <div class="radio-list">
         <label class="radio"><input type="radio" name="insertPos" value="start" /> At the beginning</label>
         <label class="radio"><input type="radio" name="insertPos" value="after" checked /> After page <input id="insertAfter" class="num-input" type="text" inputmode="numeric" value="1" /></label>
@@ -260,26 +260,27 @@
       <div class="modal-actions">
         <span class="spacer"></span>
         <button id="insertCancel" class="tbtn">Cancel</button>
-        <button id="insertGo" class="tbtn primary">Choose PDF(s) &amp; insertâ€¦</button>
+        <button id="insertGo" class="tbtn primary">Choose PDF(s) &amp; insert…</button>
       </div>
     </div>
   </div>
 
   <div id="dropHint" class="drop-hint" hidden>
     <div class="drop-hint-card">
-      <span class="drop-hint-icon">ï¼‹</span>
-      <span>Drop images to place them on this page â€” or PDF files to append their pages</span>
+      <span class="drop-hint-icon">＋</span>
+      <span>Drop images to place them on this page — or PDF files to append their pages</span>
     </div>
   </div>
 
   <div id="toast" class="toast" hidden></div>
-  <div id="busy" class="busy" hidden><div class="spinner"></div><span id="busyMsg">Workingâ€¦</span></div>
+  <div id="busy" class="busy" hidden><div class="spinner"></div><span id="busyMsg">Working…</span></div>
 
   <!-- Libraries (vendored, served locally) ---------------------------- -->
   <script src="vendor/pdf-lib/pdf-lib.min.js"></script>
   <script src="vendor/pdfjs/pdf.min.js"></script>
   <script src="vendor/fontkit/fontkit.umd.min.js"></script>
   <script src="vendor/fonts/rubik-font.js"></script>
+  <script src="vendor/tesseract/tesseract.min.js"></script>
   <script src="pdfOps.js"></script>
   <script src="web-api.js"></script>
   <script src="app.js"></script>

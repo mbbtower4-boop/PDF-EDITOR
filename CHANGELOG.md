@@ -1,5 +1,9 @@
 # Paperweight — Changelog
 
+## v1.17.0 — 2026-07-14
+- **Built-in OCR for scanned PDFs (Hebrew + English), fully offline.** When "Convert to Word" finds no text layer and the pages are raster images (a scan / flattened export), the app now offers to run OCR — Tesseract bundled locally (engine + language data ship with the app; nothing is fetched or uploaded). Recognized text becomes the Word document, with per-line RTL handling; progress is shown per page. Accuracy depends on scan quality — expect the occasional misread; a page takes seconds to a minute. Verified end-to-end on a real scanned engineering-review PDF (Hebrew + English recognized correctly, valid Word output).
+- Word-conversion errors now surface properly even when the OCR engine reports them as plain strings.
+
 ## v1.16.1 — 2026-07-14
 - **Clearer message when Word conversion finds no text.** If the pages are raster images (a scan or a flattened export — e.g. review PDFs where each page is one picture), the toast now says exactly that and that OCR would be required, instead of the generic "no text" line.
 

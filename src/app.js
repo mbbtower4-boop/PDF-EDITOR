@@ -2404,9 +2404,58 @@ async function saveAllText() {
 // ---- Convert to Word (.docx) ----------------------------------------------
 // Extracts the PDF's text into an editable Word document. Paragraph structure
 // and right-to-left direction (Hebrew) are preserved; exact layout is not (no
-// client-only converter can reliably reproduce tables/positions/images). Scans
-// with no text layer have nothing to extract.
+// client-only converter can reliably reproduce tables/positions/images). For
+// scanned/flattened PDFs with no text layer, bundled OCR (Tesseract, Hebrew +
+// English) reads the text out of the page images — entirely offline.
 const HEB_AR = /[֐-׿؀-ۿ]/;
+
+// Resolve the vendor/ base the same way the other bundled libs are loaded, so
+// this works both on the desktop build (../vendor/) and the web build (vendor/).
+const VENDOR_BASE = (() => {
+  const s = document.querySelector('script[src*="vendor/pdf-lib"], script[src*="vendor/pdfjs"]');
+  const src = s ? s.getAttribute('src') : 'vendor/pdf-lib/pdf-lib.min.js';
+  const rel = src.replace(/vendor\/.*$/, 'vendor/');
+  // Must be ABSOLUTE: tesseract spawns a blob worker, and relative URLs are
+  // invalid inside it (works for both http on the web and file:// in Electron).
+  return new URL(rel, location.href).href;
+})();
+let _ocrWorker = null;
+async function getOcrWorker() {
+  if (_ocrWorker) return _ocrWorker;
+  if (!window.Tesseract) throw new Error('OCR engine is not loaded');
+  _ocrWorker = await Tesseract.createWorker('heb+eng', 1, {
+    workerPath: VENDOR_BASE + 'tesseract/worker.min.js',
+    corePath: VENDOR_BASE + 'tesseract',
+    langPath: VENDOR_BASE + 'tesseract/lang',
+    gzip: true,
+  });
+  return _ocrWorker;
+}
+// OCR every page into docx paragraphs (renders each page to its own canvas,
+// so it never collides with the main viewer canvas).
+async function ocrDocumentToParas() {
+  const paras = [];
+  els.busyMsg.textContent = 'טוען מנוע OCR…';
+  const worker = await getOcrWorker();
+  for (let i = 1; i <= state.pageCount; i++) {
+    if (i > 1) paras.push({ pageBreak: true });
+    els.busyMsg.textContent = 'OCR — עמוד ' + i + ' מתוך ' + state.pageCount + '…';
+    const page = await state.pdfDoc.getPage(i);
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(2.5, Math.max(1.25, 1600 / base.width));
+    const vp = page.getViewport({ scale });
+    const c = document.createElement('canvas');
+    c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
+    await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+    const res = await worker.recognize(c);
+    const text = (res && res.data && res.data.text) ? res.data.text : '';
+    for (const raw of text.split('\n')) {
+      const line = raw.replace(/\s+$/, '');
+      paras.push({ text: line, rtl: HEB_AR.test(line) });
+    }
+  }
+  return paras;
+}
 async function exportToWord() {
   if (!state.pdfDoc) { toast('Open a PDF first', true); return; }
   showBusy('Converting to Word…');
@@ -2424,7 +2473,7 @@ async function exportToWord() {
       }
     }
     if (!anyText) {
-      // Distinguish the common case for a clearer message: pages that are just
+      // Distinguish the common case for a clearer flow: pages that are just
       // one big raster image (scan / flattened export) vs. genuinely empty.
       let looksScanned = false;
       try {
@@ -2435,16 +2484,37 @@ async function exportToWord() {
         for (const fn of opl.fnArray) if (fn === O.paintImageXObject || fn === O.paintInlineImageXObject || fn === O.paintImageMaskXObject) imgs++;
         looksScanned = imgs > 0;
       } catch (e) {}
-      toast(looksScanned
-        ? 'This PDF\'s pages are pictures (a scan / flattened export) — there is no text layer to convert. OCR would be required.'
-        : 'No selectable text found in this PDF', true);
+      if (!looksScanned || !window.Tesseract) {
+        toast(looksScanned
+          ? 'This PDF\'s pages are pictures and the OCR engine failed to load'
+          : 'No selectable text found in this PDF', true);
+        return;
+      }
+      // Scanned/flattened PDF -> offer bundled OCR (Hebrew + English, offline).
+      const go = window.confirm(
+        'אין שכבת טקסט בקובץ — העמודים הם תמונות (סריקה או ייצוא משוטח).\n' +
+        'להריץ OCR (זיהוי תווים אופטי, עברית + אנגלית)? הכול מקומי במחשב.\n' +
+        'זה עשוי לקחת עד דקה לעמוד, ודיוק הזיהוי תלוי באיכות הסריקה.');
+      if (!go) return;
+      const ocrParas = await ocrDocumentToParas();
+      if (!ocrParas.some((p) => p.text && p.text.trim())) {
+        toast('ה-OCR לא זיהה טקסט בקובץ', true);
+        return;
+      }
+      const ob = ops.buildDocx(ocrParas);
+      const osug = state.name.replace(/\.pdf$/i, '') + '.docx';
+      const osaved = await window.api.saveFile(ob, osug, 'Word document', ['docx']);
+      if (osaved) toast('Saved ' + osaved.split(/[\\/]/).pop() + ' (OCR)');
       return;
     }
     const bytes = ops.buildDocx(paras);
     const suggested = state.name.replace(/\.pdf$/i, '') + '.docx';
     const saved = await window.api.saveFile(bytes, suggested, 'Word document', ['docx']);
     if (saved) toast('Saved ' + saved.split(/[\\/]/).pop());
-  } catch (e) { toast(e.message, true); } finally { hideBusy(); }
+  } catch (e) {
+    // tesseract can reject with a plain string / ErrorEvent, not an Error
+    toast((e && e.message) || String(e) || 'ההמרה נכשלה', true);
+  } finally { hideBusy(); }
 }
 
 // ---- Extraction: embedded images -------------------------------------------

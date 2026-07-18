@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:;" />
+        content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob: data:;" />
   <title>Paperweight — PDF Editor</title>
   <link rel="icon" href="../assets/paperweight.ico" />
   <link rel="stylesheet" href="styles.css" />
@@ -161,7 +161,7 @@
             <button id="btnSaveText" class="tbtn full">Save all text (.txt)…</button>
             <button id="btnSaveWord" class="tbtn full">Convert to Word (.docx)…</button>
           </div>
-          <p class="small muted" style="margin:-8px 0 14px">Word export extracts the <b>editable text</b> (Hebrew &amp; RTL supported) — not an exact-layout copy. Scanned PDFs have no text to convert.</p>
+          <p class="small muted" style="margin:-8px 0 14px">Word export extracts the <b>editable text</b> (Hebrew &amp; RTL supported) — not an exact-layout copy. For <b>scanned PDFs</b> it offers built-in <b>OCR</b> (Hebrew + English, fully offline).</p>
           <h3>Images on this page</h3>
           <button id="btnScanImgs" class="tbtn full">Scan this page for images</button>
           <div id="extractImgs" class="extract-imgs"></div>
@@ -276,6 +276,7 @@
   <script src="../vendor/pdfjs/pdf.min.js"></script>
   <script src="../vendor/fontkit/fontkit.umd.min.js"></script>
   <script src="../vendor/fonts/rubik-font.js"></script>
+  <script src="../vendor/tesseract/tesseract.min.js"></script>
   <script src="pdfOps.js"></script>
   <script src="app.js"></script>
 </body>
