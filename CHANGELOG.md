@@ -1,5 +1,8 @@
 # Paperweight — Changelog
 
+## v1.17.2 — 2026-07-19
+- **Fixed: added Hebrew text came out reversed.** The text tool pre-reversed Hebrew to "visual" order before drawing, but pdf-lib+fontkit already lay Hebrew out right-to-left — so it was reversed twice and the words came out backwards (e.g. a name stamped on a quote). Text is now drawn as separate directional runs laid out right-to-left, letting the font shape each run: Hebrew reads correctly, and embedded numbers, dates and prices stay readable ("40" not "04", "09/07/2026" not "6202/70/90", "1,500 ₪") with brackets mirrored correctly. Verified on names, dates, prices, and mixed Hebrew/Latin/number lines.
+
 ## v1.17.1 — 2026-07-18
 - **Much more accurate OCR.** The scanned-PDF → Word path now renders each page at high resolution and applies grayscale + contrast before recognition, and pins Tesseract to whole-page auto segmentation with inter-word spacing kept. On a real scanned Hebrew review report this turned a barely-usable result into clean, readable text (e.g. names like "משה כרמין" / "עידן לוי" now read correctly instead of garbled). It is still an editable-text extraction — the original page layout (tables, logos, colour) is not reproduced — and Hebrew OCR still occasionally joins two words or misreads a character.
 

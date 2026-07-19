@@ -169,9 +169,15 @@ async function pageCount(bytes) {
   // ---- Unicode / Hebrew text -----------------------------------------------
   check('needsUnicodeFont detects Hebrew', ops.needsUnicodeFont('שלום') === true);
   check('needsUnicodeFont false for Latin', ops.needsUnicodeFont('hello 123 (x)') === false);
-  check('toVisualRtl reverses Hebrew', ops.toVisualRtl('שלום') === 'םולש');
-  check('toVisualRtl keeps embedded digits readable', ops.toVisualRtl('כביש 4') === '4 שיבכ');
-  check('toVisualRtl leaves Latin untouched', ops.toVisualRtl('hello') === 'hello');
+  // bidi run segmentation (drives RTL-aware drawing; fontkit shapes each run)
+  const r1 = ops.bidiRuns('שלום');
+  check('bidiRuns single Hebrew run', r1.length === 1 && r1[0].dir === 'R' && r1[0].s === 'שלום');
+  const r2 = ops.bidiRuns('כביש 40 מזרח');
+  check('bidiRuns splits Hebrew/number/Hebrew', r2.length === 3 && r2.map(r => r.dir).join('') === 'RLR' && r2[1].s === '40');
+  const r3 = ops.bidiRuns('hello');
+  check('bidiRuns pure Latin stays one L run', r3.length === 1 && r3[0].dir === 'L');
+  const r4 = ops.bidiRuns('תאריך 09/07/2026');
+  check('bidiRuns keeps a date as one LTR run', r4.length === 2 && r4[1].dir === 'L' && r4[1].s === '09/07/2026');
 
   // Hebrew stamping requires the bundled font: without it, it must throw clearly.
   let heThrew = false;

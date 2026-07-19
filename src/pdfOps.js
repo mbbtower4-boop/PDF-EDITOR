@@ -178,21 +178,50 @@
   const RTL_RE = /[\u0590-\u05FF\u0600-\u06FF\uFB1D-\uFB4F\uFE70-\uFEFF]/;
   function needsUnicodeFont(s) { return /[^\u0020-\u00FF]/.test(s); }
 
-  // PDF drawText lays glyphs out left-to-right in string order, so RTL text
-  // must be converted from logical to VISUAL order (what a viewer extracts is
-  // then the visual sequence, which reads correctly right-to-left). This is a
-  // pragmatic bidi for labels: split into directional runs, reverse the run
-  // order, reverse characters only inside RTL runs (so digits/Latin embedded
-  // in Hebrew stay readable), and mirror paired brackets.
-  function toVisualRtl(s) {
-    if (!RTL_RE.test(s)) return s;
-    const MIRROR = { '(': ')', ')': '(', '[': ']', ']': '[', '{': '}', '}': '{', '<': '>', '>': '<' };
-    const runs = s.match(/[\u0590-\u05FF\u0600-\u06FF\uFB1D-\uFB4F\uFE70-\uFEFF]+|[A-Za-z0-9#@&%+.,:\/\\-]*[A-Za-z0-9][A-Za-z0-9#@&%+.,:\/\\-]*|\s+|[\s\S]/gu) || [s];
-    return runs.reverse().map((run) => {
-      if (RTL_RE.test(run)) return Array.from(run).reverse().join('');
-      if (/^[A-Za-z0-9]/.test(run) || /[A-Za-z0-9]$/.test(run)) return run; // LTR run stays logical
-      return Array.from(run).map((ch) => MIRROR[ch] || ch).join('');
-    }).join('');
+  // Bidi for drawing RTL text. Key fact: pdf-lib + fontkit already lay a single
+  // Hebrew/Arabic run out right-to-left correctly on their own. So we must NOT
+  // pre-reverse the characters (that double-reverses and the text comes out
+  // backwards). Instead we split the LOGICAL string into maximal same-direction
+  // runs, lay the runs out right-to-left (first logical run = rightmost), and
+  // draw each run separately in logical order \u2014 letting fontkit shape each run.
+  // Numbers/Latin runs then stay readable (e.g. "40", "09/07/2026", "1,500")
+  // and brackets are mirrored inside RTL runs.
+  const BIDI_MIRROR = { '(': ')', ')': '(', '[': ']', ']': '[', '{': '}', '}': '{', '<': '>', '>': '<' };
+  function charDir(ch) {
+    const p = ch.codePointAt(0);
+    if ((p >= 0x0590 && p <= 0x05FF) || (p >= 0x0600 && p <= 0x06FF) ||
+        (p >= 0xFB1D && p <= 0xFB4F) || (p >= 0xFE70 && p <= 0xFEFF)) return 'R';
+    if ((p >= 0x30 && p <= 0x39) || (p >= 0x41 && p <= 0x5A) ||
+        (p >= 0x61 && p <= 0x7A) || p === 0x20AA) return 'L';
+    return 'N'; // neutral: resolves to its neighbours, else the base direction
+  }
+  // Returns runs [{ dir: 'R'|'L', s }] in LOGICAL order; base direction RTL.
+  function bidiRuns(text) {
+    const chars = Array.from(text);
+    const cls = chars.map(charDir);
+    for (let i = 0; i < cls.length; i++) {
+      if (cls[i] !== 'N') continue;
+      let prev = null, next = null;
+      for (let j = i - 1; j >= 0; j--) if (cls[j] !== 'N') { prev = cls[j]; break; }
+      for (let j = i + 1; j < cls.length; j++) if (cls[j] !== 'N') { next = cls[j]; break; }
+      cls[i] = (prev && next && prev === next) ? prev : 'R';
+    }
+    const out = []; let cur = null;
+    chars.forEach((ch, i) => {
+      if (!cur || cur.dir !== cls[i]) { cur = { dir: cls[i], s: '' }; out.push(cur); }
+      cur.s += ch;
+    });
+    return out;
+  }
+  // Draw one text item with RTL-aware layout onto a page.
+  function drawBidiText(page, item, size, font, color) {
+    const runs = bidiRuns(String(item.text ?? '')).reverse(); // rightmost = first logical run
+    let cx = item.x;
+    for (const r of runs) {
+      const s = r.dir === 'R' ? Array.from(r.s).map((ch) => BIDI_MIRROR[ch] || ch).join('') : r.s;
+      page.drawText(s, { x: cx, y: item.y, size, font, color });
+      cx += font.widthOfTextAtSize(s, size);
+    }
   }
 
   // items: [{ page, x, y, text, size, color }]  (y is baseline, bottom-left origin)
@@ -214,13 +243,13 @@
       const page = doc.getPage(it.page);
       const raw = String(it.text ?? '');
       const useUni = needsUnicodeFont(raw);
-      page.drawText(useUni ? toVisualRtl(raw) : raw, {
-        x: it.x,
-        y: it.y,
-        size: it.size || 14,
-        font: useUni ? uniFont : font,
-        color: rgb(PDFLib, it.color || '#111111'),
-      });
+      const size = it.size || 14;
+      const color = rgb(PDFLib, it.color || '#111111');
+      if (useUni && RTL_RE.test(raw)) {
+        drawBidiText(page, it, size, uniFont, color); // RTL-aware, run-by-run
+      } else {
+        page.drawText(raw, { x: it.x, y: it.y, size, font: useUni ? uniFont : font, color });
+      }
     }
     return doc.save();
   }
@@ -488,7 +517,7 @@
     applyEdits,
     // text helpers (exported mainly for tests)
     needsUnicodeFont,
-    toVisualRtl,
+    bidiRuns,
     buildDocx,
   };
 });
