@@ -143,6 +143,15 @@ body {
 .slider input[type=range] { width: 120px; accent-color: var(--accent); }
 .size-input { width: 58px; background: var(--panel-2); border: 1px solid var(--line); color: var(--ink); border-radius: 5px; padding: 6px 8px; font-family: var(--mono); }
 .size-input:focus { outline: none; border-color: var(--accent); }
+.size-input.narrow { width: 50px; padding: 6px 5px; text-align: center; }
+
+/* Text properties bar: enough controls that it reflows to a second row on
+   narrower windows rather than overflowing off the side. */
+.tool-options.text-props { height: auto; min-height: 46px; flex-wrap: wrap; gap: 7px 9px; padding: 6px 13px; }
+.opt-div { width: 1px; align-self: stretch; min-height: 22px; background: var(--line); flex: 0 0 auto; }
+.mini-range { width: 66px; accent-color: var(--accent); flex: 0 0 auto; }
+.tbtn.toggle.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-2); }
+.tbtn.toggle.on svg { color: var(--accent-2); }
 
 /* ---- Workspace ------------------------------------------------------- */
 .workspace { flex: 1 1 auto; display: flex; min-height: 0; }
@@ -268,15 +277,49 @@ body {
 .img-handle.ne { right: -7px; top: -7px; cursor: nesw-resize; }
 .img-handle.sw { left: -7px; bottom: -7px; cursor: nesw-resize; }
 .img-handle.se { right: -7px; bottom: -7px; cursor: nwse-resize; }
+/* Mid-edge handles (text boxes): stretch one axis only. Rectangular so they
+   read differently from the square corner handles. */
+.img-handle.edge { border-radius: 4px; }
+.img-handle.edge.n, .img-handle.edge.s { width: 17px; height: 9px; left: 50%; margin-left: -8.5px; cursor: ns-resize; }
+.img-handle.edge.e, .img-handle.edge.w { width: 9px; height: 17px; top: 50%; margin-top: -8.5px; cursor: ew-resize; }
+.img-handle.edge.n { top: -5px; }
+.img-handle.edge.s { bottom: -5px; }
+.img-handle.edge.e { right: -5px; }
+.img-handle.edge.w { left: -5px; }
 .img-del { position: absolute; top: -13px; right: -13px; width: 24px; height: 24px; border-radius: 50%; border: 1.5px solid var(--accent-ink); background: var(--danger); color: #fff; cursor: pointer; font-size: 12px; line-height: 1; display: none; place-items: center; box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
 .img-obj.selected .img-del { display: grid; }
 .tool-hand .img-obj { cursor: move; }
 
-.txt-obj { position: absolute; white-space: pre; line-height: 1.0; pointer-events: none; font-family: var(--ui); }
+/* Live text blocks. transform-origin matches the pivot stampText rotates about
+   (the block's top-left), so the preview and the baked PDF agree. */
+.txt-obj { position: absolute; white-space: pre; line-height: 1.25; pointer-events: none; font-family: var(--ui); transform-origin: 0 0; }
 .txt-obj.selected { outline: 1.5px solid var(--accent); }
 .txt-obj.selected .img-handle { display: block; }
 .txt-obj.selected .img-del { display: grid; }
+.txt-obj.selected .rot-handle { display: block; }
 .tool-hand .txt-obj { cursor: move; }
+/* A hint that the words are clickable before they're selected. */
+.tool-hand .txt-obj:hover:not(.selected) { outline: 1.5px dashed rgba(150,150,150,0.55); }
+
+/* Rotation knob, on a short stalk above the block. */
+.rot-handle {
+  position: absolute; left: 50%; top: -27px; width: 14px; height: 14px; margin-left: -7px;
+  background: var(--panel-2); border: 1.5px solid var(--accent); border-radius: 50%;
+  display: none; cursor: grab; box-shadow: 0 1px 4px rgba(0,0,0,0.45);
+}
+.rot-handle::after {
+  /* Short stalk — it stops just above the north stretch handle so the two
+     targets never fight over the pointer. */
+  content: ''; position: absolute; left: 50%; top: 100%; width: 1.5px; height: 7px;
+  margin-left: -0.75px; background: var(--accent);
+}
+.rot-handle:active { cursor: grabbing; }
+
+/* Off-screen twin of .txt-obj — sizes the floating editor to its content. */
+#pwMeasure {
+  position: absolute; left: -99999px; top: 0; visibility: hidden;
+  white-space: pre; font-family: var(--ui); padding: 0; border: 0;
+}
 
 .ann-obj { position: absolute; pointer-events: none; }
 .ann-obj.selected { outline: 1.5px solid var(--accent); }
@@ -298,11 +341,31 @@ body {
 /* While panning (Hand drag or right-button drag) the hand closes. */
 body.panning, body.panning * { cursor: grabbing !important; }
 
+/* Floating editor: a textarea, so text can run to several lines. It never soft-
+   wraps — the breaks you type are the breaks that get baked. It sits on an
+   OPAQUE plate (the block underneath hides meanwhile) so the words being
+   edited are a single crisp copy, not a doubled ghost. */
 .float-input {
-  position: absolute; pointer-events: auto;
-  background: rgba(255,255,255,0.0); border: 1px dashed var(--accent);
+  position: absolute; pointer-events: auto; transform-origin: 0 0;
+  border: 1.5px solid var(--accent); border-radius: 3px;
   color: #111; font-family: var(--ui); padding: 0 2px; outline: none;
-  white-space: pre; line-height: 1.1;
+  white-space: pre; overflow: hidden; resize: none;
+  caret-color: var(--accent);
+  box-shadow: 0 3px 18px rgba(0,0,0,0.3);
+  -webkit-font-smoothing: antialiased;
+}
+.float-input.on-light { background: #ffffff; }
+.float-input.on-dark { background: #2b303a; }  /* light-coloured text stays visible */
+.float-input::selection { background: rgba(224,138,60,0.35); }
+.float-hint {
+  position: absolute; pointer-events: none; white-space: nowrap;
+  background: var(--panel-2); color: var(--ink-dim); border: 1px solid var(--line);
+  /* Explicit line-height: the hint lives inside .page-wrap, whose line-height
+     is 0 (canvas-gap trick) — inherited, it crushes the text to a half-clipped
+     strip. */
+  line-height: 1.5;
+  border-radius: 5px; padding: 3px 8px; font-size: 11px; font-family: var(--ui);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35);
 }
 
 /* Right panel */

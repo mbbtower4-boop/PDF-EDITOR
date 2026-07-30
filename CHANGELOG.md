@@ -1,5 +1,26 @@
 # Paperweight — Changelog
 
+## v1.20.0 — 2026-07-30
+- **Stretch text boxes from the sides.** Every selected text box now has four mid-edge handles alongside the corner ones: dragging a **side** handle changes only the width (the letters genuinely widen or squeeze), dragging **top/bottom** changes only the height — so you can affect one dimension without touching the other. The opposite edge stays pinned while you drag, it works at any rotation, and the corner handles still resize everything proportionally.
+- The stretch is baked into the PDF exactly as previewed (a real transformation matrix in the page content, not a re-flow), and the in-place editor opens with the same stretch so editing a widened box still lines up perfectly.
+
+## v1.19.1 — 2026-07-30
+- **Fixed: the shortcut hint under the text editor was half-clipped.** The hint bar ("Enter = new line · Ctrl+Enter = done · Esc = cancel") inherited the page frame’s zero line-height, which crushed its text to a sliced strip. It now sets its own line height and shows in full.
+
+## v1.19.0 — 2026-07-30
+- **Copy & paste whole text boxes.** Select a box and press **Ctrl+C**, then **Ctrl+V** pastes an identical copy — words, colour, size, angle, everything — on the same page or **any other page**. Repeated pastes cascade so copies never stack invisibly. The ⧉ button in the bar is now labelled **⧉ Copy** (it duplicates in place, same as Ctrl+D). Copying selected page text with Ctrl+C keeps working as before.
+- **Editing in place is crisp now.** Re-opening a text box used to draw the editor on top of the original words — two copies at once, which read as blurry. The original now hides while its editor is open, and the editor sits on an opaque plate (dark plate under light-coloured text) with a clear border and caret. What you see is a single sharp copy.
+- **Word-style editing behaviour.** The caret lands at the end of the text (nothing is pre-selected, so a stray keystroke can no longer wipe the block), every keystroke updates the box live, **Enter** or **F2** opens the selected box for editing, Ctrl+Enter or clicking elsewhere keeps the result, and **Esc always puts the original words back**. Emptying a box no longer deletes your text — it restores what was there.
+- Text boxes glow with a dashed outline when the Hand tool hovers over them, so it’s obvious they can be clicked.
+
+## v1.18.0 — 2026-07-28
+- **Text boxes hold real paragraphs now.** The text editor is a proper multi-line box: **Enter** starts a new line, **Ctrl+Enter** finishes, Esc cancels (a hint under the box says so). The box grows as you type and never re-wraps behind your back — the line breaks you type are exactly the ones that get baked into the PDF. Line spacing is adjustable from 0.8 to 3.0.
+- **Duplicate text.** **Ctrl+D**, or the ⧉ button, drops an independent copy just below the original — same words, colour, size, angle and styling. Repeat for as many as you need.
+- **Rotate text properly.** Drag the round handle above a selected text box to spin it, holding **Shift** to snap to 15°; or type an exact angle / drag the slider in the top bar, with ↺ ↻ buttons for quick 90° turns. Text rotates **about its own centre**, so it turns in place instead of swinging off the page, and resizing by the corners still feels right at any angle.
+- **A real properties bar for text.** Selecting text with the Hand tool now gives colour, size, **bold**, *italic*, left/centre/right alignment, angle, line spacing and fade (opacity) — all on one row, all applied live. Latin text uses the genuine Helvetica bold and italic cuts; Hebrew, which ships with a single font cut, gets a carefully matched synthetic bold and oblique.
+- **Alignment understands Hebrew.** Left alone, a block aligns the way its script reads — Hebrew to the right, Latin to the left — and you can override it per block. Multi-line Hebrew keeps its right-to-left run layout at every angle, so numbers, dates and prices inside it stay readable.
+- Line breaks and tabs no longer make the app think text needs the Unicode font.
+
 ## v1.17.2 — 2026-07-19
 - **Fixed: added Hebrew text came out reversed.** The text tool pre-reversed Hebrew to "visual" order before drawing, but pdf-lib+fontkit already lay Hebrew out right-to-left — so it was reversed twice and the words came out backwards (e.g. a name stamped on a quote). Text is now drawn as separate directional runs laid out right-to-left, letting the font shape each run: Hebrew reads correctly, and embedded numbers, dates and prices stay readable ("40" not "04", "09/07/2026" not "6202/70/90", "1,500 ₪") with brackets mirrored correctly. Verified on names, dates, prices, and mixed Hebrew/Latin/number lines.
 

@@ -33,6 +33,12 @@ const state = {
   penWidth: 2.5,
   textColor: '#111111',
   textSize: 14,
+  // Text styling, remembered between objects so a run of edits keeps its look.
+  textLineHeight: 1.25,
+  textAlign: 'auto',   // 'auto' follows the script (Hebrew right, Latin left)
+  textOpacity: 1,
+  textBold: false,
+  textItalic: false,
   // signature
   pendingSigPng: null, // Uint8Array
   pendingSigAspect: 1, // width/height
@@ -42,6 +48,8 @@ const state = {
   selectedImageId: null,
   texts: [],           // live, editable text objects on the page (baked on save)
   selectedTextId: null,
+  editingTextId: null, // text object currently open in the floating editor (hidden under it)
+  textClipboard: null, // cloned text object for Ctrl+C / Ctrl+V (works across pages)
   highlights: [],      // live highlight rects (baked on save)
   inks: [],            // live pen strokes (baked on save)
   manualMarks: [],     // live Inbar manual-op marks (baked on save; deletable/undoable)
@@ -104,7 +112,14 @@ function setDocActionsEnabled(on) {
 
 // ---- Undo -----------------------------------------------------------------
 function cloneImg(o) { return { id: o.id, page: o.page, x: o.x, y: o.y, w: o.w, h: o.h, bytes: o.bytes, aspect: o.aspect, _url: o._url }; }
-function cloneText(o) { return { id: o.id, page: o.page, x: o.x, yTop: o.yTop, text: o.text, size: o.size, color: o.color }; }
+function cloneText(o) {
+  return {
+    id: o.id, page: o.page, x: o.x, yTop: o.yTop, text: o.text, size: o.size, color: o.color,
+    rot: o.rot || 0, align: o.align || 'auto', lineHeight: o.lineHeight || 1.25,
+    opacity: o.opacity == null ? 1 : o.opacity, bold: !!o.bold, italic: !!o.italic,
+    scaleX: o.scaleX || 1, scaleY: o.scaleY || 1,
+  };
+}
 function cloneHl(o) { return { id: o.id, page: o.page, x: o.x, y: o.y, w: o.w, h: o.h, color: o.color, opacity: o.opacity }; }
 function cloneInk(o) { return { id: o.id, page: o.page, ox: o.ox, oy: o.oy, w: o.w, h: o.h, color: o.color, width: o.width, points: o.points.map((p) => ({ dx: p.dx, dy: p.dy })) }; }
 function cloneMark(o) { return { id: o.id, page: o.page, x: o.x, y: o.y, kind: o.kind }; }
@@ -132,6 +147,7 @@ async function undo() {
   state.selectedImageId = null;
   state.selectedTextId = null;
   state.selectedAnnId = null;
+  state.editingTextId = null;
   state.selectedPages.clear(); // page indices may no longer match after revert
   els.undo.disabled = state.undo.length === 0;
   await reloadAfterEdit({ rebuildForm: true });
@@ -151,6 +167,7 @@ async function openPdf() {
     state.selectedImageId = null;
     state.texts = [];
     state.selectedTextId = null;
+    state.editingTextId = null;
     state.highlights = [];
     state.inks = [];
     state.manualMarks = [];
@@ -1190,54 +1207,134 @@ function optColorRow(label, colors, key) {
 function optSlider(label, key, min, max, step) {
   return `<div class="slider"><span class="opt-label">${label}</span><input type="range" id="opt_${key}" min="${min}" max="${max}" step="${step}" value="${state[key]}"></div>`;
 }
-// Editable properties for the currently-selected text object (color + size),
-// shown in the options strip when the Hand tool has a text selected. This is
-// how you recolour/resize text AFTER placing it.
-let tpSizeSnapped = false;
+// Editable properties for the currently-selected text object, shown in the
+// options strip when the Hand tool has a text selected. This is how you restyle
+// text AFTER placing it: colour, size, weight, alignment, rotation, line
+// spacing, opacity — plus duplicate / re-edit / delete.
+// Six swatches plus the custom picker: enough range to pick from at a glance,
+// short enough that the whole properties bar still fits on one row.
+const TEXT_COLORS = ['#111111', '#d62828', '#1d3557', '#2a9d8f', '#e8590c', '#ffffff'];
+const RTL_TEXT = /[\u0590-\u05FF\u0600-\u06FF\uFB1D-\uFB4F\uFE70-\uFEFF]/;
+const ALIGN_ICON = {
+  left: '<svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="3" width="14" height="1.7" rx=".85"/><rect x="1" y="7.2" width="8.5" height="1.7" rx=".85"/><rect x="1" y="11.4" width="12" height="1.7" rx=".85"/></svg>',
+  center: '<svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="3" width="14" height="1.7" rx=".85"/><rect x="3.75" y="7.2" width="8.5" height="1.7" rx=".85"/><rect x="2" y="11.4" width="12" height="1.7" rx=".85"/></svg>',
+  right: '<svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="3" width="14" height="1.7" rx=".85"/><rect x="6.5" y="7.2" width="8.5" height="1.7" rx=".85"/><rect x="3" y="11.4" width="12" height="1.7" rx=".85"/></svg>',
+};
 function selectedText() { return state.texts.find((x) => x.id === state.selectedTextId) || null; }
-function setSelectedTextColor(c) {
-  const t = selectedText(); if (!t) return;
-  pushUndo(); t.color = c; state.textColor = c;
-  renderTextObjects(); renderToolOptions();
+function textBoxEl(t) { return els.txtLayer.querySelector('.txt-obj[data-id="' + t.id + '"]'); }
+// 'auto' alignment follows the script, the way the baked PDF does.
+function resolveAlign(t) {
+  const a = t.align || 'auto';
+  return a !== 'auto' ? a : (RTL_TEXT.test(String(t.text || '')) ? 'right' : 'left');
+}
+// One undo snapshot per gesture (a slider drag, a burst of typing) rather than
+// one per pixel of movement.
+let tpGesture = false;
+function tpBegin() { if (!tpGesture) { pushUndo(); tpGesture = true; } }
+function setTextProp(key, value, rememberAs) {
+  const t = selectedText(); if (!t) return null;
+  tpBegin();
+  t[key] = value;
+  if (rememberAs) state[rememberAs] = value;
+  return t;
 }
 function renderTextPropsBar() {
   const t = selectedText();
   if (!t) { renderToolOptions(); return; }
-  const colors = ['#111111', '#d62828', '#1d3557', '#2a9d8f', '#e8590c', '#6741d9', '#2f9e44', '#1971c2', '#ffffff'];
   const cur = String(t.color || '').toLowerCase();
-  const sw = colors.map((c) => `<span class="swatch${cur === c.toLowerCase() ? ' active' : ''}" data-color="${c}" style="background:${c}"></span>`).join('');
-  const isCustom = !colors.some((c) => c.toLowerCase() === cur);
+  const sw = TEXT_COLORS.map((c) => `<span class="swatch${cur === c.toLowerCase() ? ' active' : ''}" data-color="${c}" style="background:${c}"></span>`).join('');
+  const isCustom = !TEXT_COLORS.some((c) => c.toLowerCase() === cur);
   const custom = `<label class="swatch swatch-custom${isCustom ? ' active' : ''}" title="Custom color" style="${isCustom ? 'background:' + t.color : ''}"><input type="color" class="tp-color" value="${cur || '#000000'}"></label>`;
+  const al = resolveAlign(t);
+  const alignBtns = ['left', 'center', 'right'].map((a) =>
+    `<button class="tbtn icon toggle${al === a ? ' on' : ''}" data-align="${a}" title="Align ${a}">${ALIGN_ICON[a]}</button>`).join('');
+  const div = '<span class="opt-div"></span>';
   els.toolOptions.innerHTML =
-    '<span class="opt-label">Text color</span><div class="swatches">' + sw + custom + '</div>' +
-    '<span class="opt-label">Size</span><input class="size-input" id="tpSize" type="number" min="6" max="200" value="' + Math.round(t.size) + '">' +
-    '<button class="tbtn" id="tpEdit">Edit words…</button>' +
-    '<button class="tbtn danger" id="tpDel">Delete</button>';
+    '<div class="swatches">' + sw + custom + '</div>' + div +
+    '<input class="size-input" id="tpSize" type="number" min="4" max="400" title="Font size" value="' + Math.round(t.size) + '">' +
+    '<button class="tbtn icon toggle' + (t.bold ? ' on' : '') + '" id="tpBold" title="Bold"><b>B</b></button>' +
+    '<button class="tbtn icon toggle' + (t.italic ? ' on' : '') + '" id="tpItalic" title="Italic"><i>I</i></button>' + div +
+    alignBtns + div +
+    '<span class="opt-label">Angle</span>' +
+    '<input type="range" class="mini-range" id="tpRotRange" min="-180" max="180" step="1" title="Rotate" value="' + Math.round(t.rot || 0) + '">' +
+    '<input class="size-input narrow" id="tpRot" type="number" min="-180" max="180" step="1" title="Angle in degrees" value="' + Math.round(t.rot || 0) + '">' +
+    '<button class="tbtn icon" id="tpRotL" title="Rotate 90° left">↺</button>' +
+    '<button class="tbtn icon" id="tpRotR" title="Rotate 90° right">↻</button>' + div +
+    '<span class="opt-label">Line</span><input type="range" class="mini-range" id="tpLine" min="0.8" max="3" step="0.05" title="Line spacing" value="' + (t.lineHeight || 1.25) + '">' +
+    '<span class="opt-label">Fade</span><input type="range" class="mini-range" id="tpOpacity" min="10" max="100" step="1" title="Opacity" value="' + Math.round((t.opacity == null ? 1 : t.opacity) * 100) + '">' + div +
+    '<button class="tbtn" id="tpEdit" title="Edit the words (Enter / double-click)">Edit text…</button>' +
+    '<button class="tbtn" id="tpDup" title="Make an identical copy (Ctrl+D). Ctrl+C then Ctrl+V pastes onto any page.">⧉ Copy</button>' +
+    '<button class="tbtn icon danger" id="tpDel" title="Delete (Del)">✕</button>';
   els.toolOptions.hidden = false;
+  els.toolOptions.classList.add('text-props');
+  tpGesture = false;
+
+  const live = () => { renderTextObjects(); };            // restyle in place
+  const settled = () => { tpGesture = false; renderTextObjects(); renderToolOptions(); };
+
   els.toolOptions.querySelectorAll('.swatch[data-color]').forEach((s) => {
-    s.addEventListener('click', () => setSelectedTextColor(s.dataset.color));
+    s.addEventListener('click', () => { setTextProp('color', s.dataset.color, 'textColor'); settled(); });
   });
   const ci = els.toolOptions.querySelector('.tp-color');
-  if (ci) ci.addEventListener('change', () => setSelectedTextColor(ci.value));
-  tpSizeSnapped = false;
+  if (ci) ci.addEventListener('input', () => { setTextProp('color', ci.value, 'textColor'); live(); });
+  if (ci) ci.addEventListener('change', settled);
+
   const sz = $('tpSize');
   if (sz) {
     sz.addEventListener('input', () => {
-      const cur2 = selectedText(); if (!cur2) return;
-      const v = Math.max(4, Math.min(200, parseInt(sz.value || '14', 10) || 14));
-      if (!tpSizeSnapped) { pushUndo(); tpSizeSnapped = true; }
-      cur2.size = v; state.textSize = v; renderTextObjects();
+      const v = Math.max(4, Math.min(400, parseFloat(sz.value) || 14));
+      setTextProp('size', v, 'textSize'); live();
     });
-    sz.addEventListener('change', () => { tpSizeSnapped = false; });
+    sz.addEventListener('change', () => { tpGesture = false; });
     sz.addEventListener('keydown', (e) => e.stopPropagation());
   }
-  const ed = $('tpEdit');
-  if (ed) ed.addEventListener('click', () => {
-    const box = els.txtLayer.querySelector('.txt-obj[data-id="' + t.id + '"]');
-    if (box) editTextObject(t, box);
+  const bold = $('tpBold');
+  if (bold) bold.addEventListener('click', () => { setTextProp('bold', !t.bold, 'textBold'); settled(); });
+  const ital = $('tpItalic');
+  if (ital) ital.addEventListener('click', () => { setTextProp('italic', !t.italic, 'textItalic'); settled(); });
+  els.toolOptions.querySelectorAll('[data-align]').forEach((b) => {
+    b.addEventListener('click', () => { setTextProp('align', b.dataset.align, 'textAlign'); settled(); });
   });
-  const dl = $('tpDel');
-  if (dl) dl.addEventListener('click', () => deleteText(t));
+
+  // Rotation keeps the block's centre pinned, so text turns in place rather
+  // than swinging away from where you put it.
+  const rr = $('tpRotRange'), rn = $('tpRot');
+  const spin = (deg, commit) => {
+    const cur2 = selectedText(); if (!cur2) return;
+    const box = textBoxEl(cur2); if (!box) return;
+    tpBegin();
+    applyTextRotation(cur2, box, normDeg(deg));
+    if (rr) rr.value = String(Math.round(cur2.rot));
+    if (rn) rn.value = String(Math.round(cur2.rot));
+    if (commit) settled();
+  };
+  if (rr) {
+    rr.addEventListener('input', () => spin(parseFloat(rr.value) || 0, false));
+    rr.addEventListener('change', () => { tpGesture = false; });
+  }
+  if (rn) {
+    rn.addEventListener('input', () => spin(parseFloat(rn.value) || 0, false));
+    rn.addEventListener('change', () => { tpGesture = false; });
+    rn.addEventListener('keydown', (e) => e.stopPropagation());
+  }
+  const rl = $('tpRotL'); if (rl) rl.addEventListener('click', () => spin((t.rot || 0) + 90, true));
+  const rgt = $('tpRotR'); if (rgt) rgt.addEventListener('click', () => spin((t.rot || 0) - 90, true));
+
+  const lh = $('tpLine');
+  if (lh) {
+    lh.addEventListener('input', () => { setTextProp('lineHeight', parseFloat(lh.value) || 1.25, 'textLineHeight'); live(); });
+    lh.addEventListener('change', () => { tpGesture = false; });
+  }
+  const op = $('tpOpacity');
+  if (op) {
+    op.addEventListener('input', () => { setTextProp('opacity', (parseFloat(op.value) || 100) / 100, 'textOpacity'); live(); });
+    op.addEventListener('change', () => { tpGesture = false; });
+  }
+
+  const ed = $('tpEdit');
+  if (ed) ed.addEventListener('click', () => { const box = textBoxEl(t); if (box) editTextObject(t, box); });
+  const dup = $('tpDup'); if (dup) dup.addEventListener('click', () => duplicateText(t));
+  const dl = $('tpDel'); if (dl) dl.addEventListener('click', () => deleteText(t));
 }
 function renderToolOptions() {
   // A selected text object (Hand tool) gets its own editable properties strip.
@@ -1245,6 +1342,7 @@ function renderToolOptions() {
   const html = (TOOL_OPTIONS[state.tool] || (() => ''))();
   els.toolOptions.innerHTML = html;
   els.toolOptions.hidden = !html;
+  els.toolOptions.classList.remove('text-props');
   els.toolOptions.querySelectorAll('.swatch[data-color]').forEach((s) => {
     s.addEventListener('click', () => {
       const key = s.dataset.key;
@@ -1411,50 +1509,106 @@ async function commitPen(points) {
   renderAnnObjects();
 }
 
-// Floating text input committed on Enter / blur
-function placeTextInput(p) {
-  const existing = els.pageWrap.querySelector('.float-input');
-  if (existing) existing.remove();
-  const inp = document.createElement('input');
-  inp.type = 'text'; inp.className = 'float-input'; inp.dir = 'auto';
-  const sizePx = state.textSize * state.scale;
-  inp.style.left = p.x + 'px';
-  inp.style.top = p.y + 'px';
-  inp.style.fontSize = sizePx + 'px';
-  inp.style.color = state.textColor;
-  inp.style.minWidth = '20px';
-  els.pageWrap.appendChild(inp);
-
-  const baselineY = p.y + sizePx; // (kept for reference; baking derives baseline from size)
+// ---- The floating text editor ---------------------------------------------
+// A textarea rather than an input, so a block can run to several lines. It
+// never soft-wraps: the line breaks you type are exactly the ones that get
+// baked, so the box on screen matches the finished PDF.
+// An off-screen twin of .txt-obj, used to size the editor to its content.
+function measureTextBlock(text, fontPx, lineHeight, bold, italic) {
+  let m = $('pwMeasure');
+  if (!m) { m = document.createElement('div'); m.id = 'pwMeasure'; document.body.appendChild(m); }
+  m.style.fontSize = fontPx + 'px';
+  m.style.lineHeight = String(lineHeight);
+  m.style.fontWeight = bold ? '700' : '400';
+  m.style.fontStyle = italic ? 'italic' : 'normal';
+  m.textContent = text && text.length ? text : ' ';
+  return { w: m.offsetWidth, h: m.offsetHeight };
+}
+function openTextEditor(o) {
+  els.pageWrap.querySelectorAll('.float-input, .float-hint').forEach((n) => n.remove());
+  const ta = document.createElement('textarea');
+  ta.className = 'float-input'; ta.dir = 'auto'; ta.spellcheck = false; ta.wrap = 'off';
+  ta.value = o.value || '';
+  ta.style.left = o.left + 'px'; ta.style.top = o.top + 'px';
+  ta.style.fontSize = o.sizePx + 'px';
+  ta.style.lineHeight = String(o.lineHeight || 1.25);
+  ta.style.color = o.color;
+  ta.style.fontWeight = o.bold ? '700' : '400';
+  ta.style.fontStyle = o.italic ? 'italic' : 'normal';
+  if (o.align && o.align !== 'auto') ta.style.textAlign = o.align;
+  // Sit exactly over the real text — same rotation AND the same stretch.
+  ta.style.transform = textTransform({ rot: o.rot || 0, scaleX: o.scaleX || 1, scaleY: o.scaleY || 1 });
+  els.pageWrap.appendChild(ta);
+  const hint = document.createElement('div');
+  hint.className = 'float-hint';
+  hint.textContent = 'Enter = new line · Ctrl+Enter = done · Esc = cancel';
+  els.pageWrap.appendChild(hint);
+  // The editor must be readable over anything, so it gets an opaque plate —
+  // dark when the text itself is light, light otherwise.
+  ta.classList.add(isLightColor(o.color) ? 'on-dark' : 'on-light');
+  const fit = () => {
+    const m = measureTextBlock(ta.value, o.sizePx, o.lineHeight || 1.25, o.bold, o.italic);
+    ta.style.width = (m.w + Math.max(8, o.sizePx * 0.6)) + 'px';
+    ta.style.height = (m.h + 3) + 'px';
+    hint.style.left = ta.offsetLeft + 'px';
+    hint.style.top = (ta.offsetTop + ta.offsetHeight + 6) + 'px';
+  };
   let done = false;
   let ready = false; // blocks the spurious blur that fires during initial focus
-  const commit = async () => {
-    if (done || !ready) return;
-    done = true;
-    const text = inp.value; inp.remove();
-    if (!text.trim()) return;
-    const vp = state.viewport;
-    const [xLeft, yTop] = vp.convertToPdfPoint(p.x, p.y); // top-left of the box in PDF space
-    pushUndo();
-    const obj = {
-      id: 'txt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-      page: state.pageIndex, x: xLeft, yTop, text, size: state.textSize, color: state.textColor,
-    };
-    state.texts.push(obj);
-    state.selectedTextId = obj.id; state.selectedImageId = null;
-    selectTool('hand'); // switch to Hand so it can be dragged/resized right away
-    toast('Text added — drag it, or its corners to resize');
-  };
-  inp.addEventListener('keydown', (e) => {
+  const close = () => { done = true; ta.remove(); hint.remove(); };
+  const commit = () => { if (done || !ready) return; const v = ta.value; close(); o.onCommit(v); };
+  ta.addEventListener('input', () => { fit(); if (o.onInput) o.onInput(ta.value); });
+  ta.addEventListener('keydown', (e) => {
     e.stopPropagation(); // typing must not trigger app shortcuts (h, arrows, …)
-    if (e.key === 'Enter') { e.preventDefault(); commit(); }
-    else if (e.key === 'Escape') { done = true; inp.remove(); }
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); close(); if (o.onCancel) o.onCancel(); }
   });
-  inp.addEventListener('blur', commit);
+  ta.addEventListener('blur', commit);
+  fit();
   // Focus on the next tick: doing it synchronously here lets the click that
   // created the field immediately hand focus back to the page, which blurred
   // and removed the field before anything could be typed.
-  setTimeout(() => { inp.focus(); ready = true; }, 0);
+  // Caret goes to the end — never select-all, which made one keystroke wipe
+  // the whole block.
+  setTimeout(() => {
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    ready = true;
+  }, 0);
+  return ta;
+}
+// Perceived luminance — decides whether the editor plate behind the text
+// should be light or dark so the words stay readable while being edited.
+function isLightColor(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return false;
+  const n = parseInt(m[1], 16);
+  return (0.299 * (n >> 16 & 255) + 0.587 * (n >> 8 & 255) + 0.114 * (n & 255)) > 186;
+}
+function placeTextInput(p) {
+  openTextEditor({
+    left: p.x, top: p.y,
+    sizePx: state.textSize * state.scale, color: state.textColor,
+    lineHeight: state.textLineHeight, align: state.textAlign,
+    bold: state.textBold, italic: state.textItalic, value: '',
+    onCommit: (text) => {
+      if (!text.trim()) return;
+      const [xLeft, yTop] = state.viewport.convertToPdfPoint(p.x, p.y); // top-left in PDF space
+      pushUndo();
+      const obj = {
+        id: 'txt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        page: state.pageIndex, x: xLeft, yTop, text,
+        size: state.textSize, color: state.textColor, rot: 0,
+        align: state.textAlign, lineHeight: state.textLineHeight,
+        opacity: state.textOpacity, bold: state.textBold, italic: state.textItalic,
+        scaleX: 1, scaleY: 1,
+      };
+      state.texts.push(obj);
+      state.selectedTextId = obj.id; state.selectedImageId = null;
+      selectTool('hand'); // switch to Hand so it can be dragged/rotated/resized right away
+      toast('Text added — drag it, spin the top handle to rotate, corners to resize');
+    },
+  });
 }
 
 async function placeSignature(p) {
@@ -1651,9 +1805,21 @@ function renderTextObjects() {
     box.dataset.id = t.id;
     box.style.left = lx + 'px'; box.style.top = ty + 'px';
     box.style.fontSize = (t.size * state.scale) + 'px';
+    box.style.lineHeight = String(t.lineHeight || 1.25);
     box.style.color = t.color;
+    box.style.fontWeight = t.bold ? '700' : '400';
+    box.style.fontStyle = t.italic ? 'italic' : 'normal';
+    box.style.opacity = String(t.opacity == null ? 1 : t.opacity);
+    // 'auto' alignment is left to dir="auto"; an explicit choice overrides it.
+    box.style.textAlign = (t.align && t.align !== 'auto') ? t.align : '';
+    // Rotation and stretch share one transform about the top-left corner — the
+    // same pivot stampText uses, so what you see is what gets baked in.
+    box.style.transform = textTransform(t);
     box.style.pointerEvents = (editable || textTool) ? 'auto' : 'none';
     box.dir = 'auto'; // Hebrew/RTL renders right-to-left like the baked PDF
+    // While the floating editor is open this block hides beneath it — showing
+    // both at once doubled the text and read as blur.
+    if (t.id === state.editingTextId) box.style.visibility = 'hidden';
     box.appendChild(document.createTextNode(t.text));
     if (editable) {
       ['nw', 'ne', 'sw', 'se'].forEach((c) => {
@@ -1661,6 +1827,17 @@ function renderTextObjects() {
         h.addEventListener('pointerdown', (e) => startTextResize(e, t, box, c));
         box.appendChild(h);
       });
+      // Mid-edge handles stretch one axis only: e/w widen, n/s tallen.
+      ['n', 's', 'e', 'w'].forEach((edge) => {
+        const h = document.createElement('div'); h.className = 'img-handle edge ' + edge;
+        h.addEventListener('pointerdown', (e) => startTextStretch(e, t, box, edge));
+        box.appendChild(h);
+      });
+      const knob = document.createElement('div');
+      knob.className = 'rot-handle';
+      knob.title = 'Drag to rotate (hold Shift to snap to 15°)';
+      knob.addEventListener('pointerdown', (e) => startTextRotate(e, t, box));
+      box.appendChild(knob);
       const del = document.createElement('button'); del.className = 'img-del'; del.textContent = '✕';
       del.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); });
       del.addEventListener('click', (e) => { e.stopPropagation(); deleteText(t); });
@@ -1711,29 +1888,103 @@ function startTextMove(e, t, box) {
   document.addEventListener('pointermove', onMove);
   document.addEventListener('pointerup', onUp);
 }
+// ---- Rotation -------------------------------------------------------------
+// The text object stores `rot` in PDF terms: degrees counter-clockwise about
+// the block's top-left corner. CSS turns clockwise on a y-down axis, so the
+// screen angle is simply the negation — these two helpers convert an offset
+// inside the block's own upright frame into page pixels, and back.
+function normDeg(d) { let v = ((Number(d) || 0) + 180) % 360; if (v < 0) v += 360; return Math.round(v - 180); }
+function rotVec(rot, lx, ly) {
+  const a = -rot * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  return { x: lx * c - ly * s, y: lx * s + ly * c };
+}
+function unrotVec(rot, sx, sy) {
+  const a = -rot * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  return { x: sx * c + sy * s, y: -sx * s + sy * c };
+}
+// The block's on-screen transform: rotation and the mid-edge stretch, both
+// about the top-left corner (transform-origin 0 0) to match the PDF anchor.
+function textTransform(t) {
+  const parts = [];
+  if (t.rot) parts.push('rotate(' + (-t.rot) + 'deg)');
+  const sx = t.scaleX || 1, sy = t.scaleY || 1;
+  if (sx !== 1 || sy !== 1) parts.push('scale(' + sx + ', ' + sy + ')');
+  return parts.join(' ');
+}
+// Visual (post-stretch) size of a block; offsetWidth/Height ignore transforms.
+function textVisualSize(t, box) {
+  return { w: box.offsetWidth * (t.scaleX || 1), h: box.offsetHeight * (t.scaleY || 1) };
+}
+// Centre of the (possibly rotated and stretched) box, in pageWrap pixels.
+function boxCentre(t, box) {
+  const s = textVisualSize(t, box);
+  const v = rotVec(t.rot || 0, s.w / 2, s.h / 2);
+  return { x: box.offsetLeft + v.x, y: box.offsetTop + v.y };
+}
+// Turn a text block to `deg` while pinning `centre` — so it rotates in place
+// instead of swinging away from where it was placed.
+function applyTextRotation(t, box, deg, centre) {
+  const c = centre || boxCentre(t, box);
+  const s = textVisualSize(t, box);
+  const v = rotVec(deg, s.w / 2, s.h / 2);
+  const left = c.x - v.x, top = c.y - v.y;
+  t.rot = deg;
+  const [px, py] = state.viewport.convertToPdfPoint(left, top);
+  t.x = px; t.yTop = py;
+  box.style.left = left + 'px'; box.style.top = top + 'px';
+  box.style.transform = textTransform(t);
+}
+function startTextRotate(e, t, box) {
+  if (state.tool !== 'hand') return;
+  e.stopPropagation(); e.preventDefault();
+  selectText(t.id);
+  const wrapRect = els.pageWrap.getBoundingClientRect();
+  const centre = boxCentre(t, box); // pinned for the whole drag
+  const ang = (ev) => Math.atan2(ev.clientY - wrapRect.top - centre.y, ev.clientX - wrapRect.left - centre.x) * 180 / Math.PI;
+  const start = ang(e), rot0 = t.rot || 0;
+  let snapped = false;
+  const onMove = (ev) => {
+    if (!snapped) { pushUndo(); snapped = true; }
+    let deg = rot0 - (ang(ev) - start);        // screen turns clockwise, rot doesn't
+    if (ev.shiftKey) deg = Math.round(deg / 15) * 15;
+    applyTextRotation(t, box, normDeg(deg), centre);
+    els.toolStatus.textContent = Math.round(t.rot) + '°';
+  };
+  const onUp = () => {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    els.toolStatus.textContent = '';
+    renderTextObjects(); renderToolOptions();
+  };
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
+}
 function startTextResize(e, t, box, corner) {
   if (state.tool !== 'hand') return;
   e.stopPropagation(); e.preventDefault();
   selectText(t.id);
   const vp = state.viewport;
   const wrapRect = els.pageWrap.getBoundingClientRect();
-  const rect0 = { left: box.offsetLeft, top: box.offsetTop, width: box.offsetWidth, height: box.offsetHeight };
-  const cssAspect = rect0.width / rect0.height || 1;
+  const rot = t.rot || 0;
+  const v0 = textVisualSize(t, box); // includes any mid-edge stretch
+  const cssAspect = v0.w / v0.h || 1;
   const origSize = t.size;
-  const fixed = {
-    x: corner.includes('e') ? rect0.left : rect0.left + rect0.width,
-    y: corner.includes('s') ? rect0.top : rect0.top + rect0.height,
-  };
+  // The opposite corner stays put. Work in the block's own upright frame so the
+  // drag still feels right when the text is rotated.
+  const lfx = corner.includes('e') ? 0 : v0.w;
+  const lfy = corner.includes('s') ? 0 : v0.h;
+  const fv = rotVec(rot, lfx, lfy);
+  const fixed = { x: box.offsetLeft + fv.x, y: box.offsetTop + fv.y };
   let snapped = false;
   const onMove = (ev) => {
     if (!snapped) { pushUndo(); snapped = true; }
-    const cx = ev.clientX - wrapRect.left, cy = ev.clientY - wrapRect.top;
-    let w = Math.abs(cx - fixed.x), h = Math.abs(cy - fixed.y);
+    const p = unrotVec(rot, ev.clientX - wrapRect.left - fixed.x, ev.clientY - wrapRect.top - fixed.y);
+    let w = Math.abs(p.x), h = Math.abs(p.y);
     if (w / h > cssAspect) h = w / cssAspect; else w = h * cssAspect; // font scales uniformly
     if (h < 8) return;
-    const left = cx < fixed.x ? fixed.x - w : fixed.x;
-    const top = cy < fixed.y ? fixed.y - h : fixed.y;
-    t.size = Math.max(4, origSize * (h / rect0.height));
+    t.size = Math.max(4, origSize * (h / v0.h));
+    const nv = rotVec(rot, corner.includes('e') ? 0 : w, corner.includes('s') ? 0 : h);
+    const left = fixed.x - nv.x, top = fixed.y - nv.y;
     box.style.left = left + 'px'; box.style.top = top + 'px';
     box.style.fontSize = (t.size * state.scale) + 'px';
     const [px, py] = vp.convertToPdfPoint(left, top);
@@ -1743,28 +1994,124 @@ function startTextResize(e, t, box, corner) {
   document.addEventListener('pointermove', onMove);
   document.addEventListener('pointerup', onUp);
 }
+// Mid-edge stretch: one axis only. Dragging e/w changes the block's width
+// (glyphs widen or squeeze), n/s its height — the opposite edge stays pinned,
+// and it works at any rotation. Implemented as scaleX/scaleY about the
+// top-left anchor, exactly what stampText bakes.
+function startTextStretch(e, t, box, edge) {
+  if (state.tool !== 'hand') return;
+  e.stopPropagation(); e.preventDefault();
+  selectText(t.id);
+  const vp = state.viewport;
+  const wrapRect = els.pageWrap.getBoundingClientRect();
+  const rot = t.rot || 0;
+  const w0 = box.offsetWidth, h0 = box.offsetHeight; // unscaled layout size
+  const v0 = textVisualSize(t, box);
+  // The fixed point, in the block's upright frame (visual units, y down):
+  // stretching east pins the west edge (the top-left origin), and vice versa.
+  const lf = { n: [0, v0.h], s: [0, 0], e: [0, 0], w: [v0.w, 0] }[edge];
+  const fv = rotVec(rot, lf[0], lf[1]);
+  const fixed = { x: box.offsetLeft + fv.x, y: box.offsetTop + fv.y };
+  let snapped = false;
+  const onMove = (ev) => {
+    if (!snapped) { pushUndo(); snapped = true; }
+    const p = unrotVec(rot, ev.clientX - wrapRect.left - fixed.x, ev.clientY - wrapRect.top - fixed.y);
+    if (edge === 'e' || edge === 'w') {
+      const w = edge === 'e' ? p.x : -p.x;
+      if (w < 8) return;
+      t.scaleX = Math.max(0.2, Math.min(8, w / w0));
+    } else {
+      const h = edge === 's' ? p.y : -p.y;
+      if (h < 8) return;
+      t.scaleY = Math.max(0.2, Math.min(8, h / h0));
+    }
+    // Re-anchor so the fixed edge stays put: for e/s the origin IS the fixed
+    // point; for w/n the origin sits a (new) width or height away from it.
+    const sw = w0 * (t.scaleX || 1), sh = h0 * (t.scaleY || 1);
+    const lo = { n: [0, -sh], s: [0, 0], e: [0, 0], w: [-sw, 0] }[edge];
+    const off = rotVec(rot, lo[0], lo[1]);
+    const left = fixed.x + off.x, top = fixed.y + off.y;
+    box.style.left = left + 'px'; box.style.top = top + 'px';
+    box.style.transform = textTransform(t);
+    const [px, py] = vp.convertToPdfPoint(left, top);
+    t.x = px; t.yTop = py;
+  };
+  const onUp = () => {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    renderTextObjects(); renderToolOptions();
+  };
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
+}
+// Drop an independent copy slightly down-and-right of the original (PDF y grows
+// upward, so "down the page" is a smaller y).
+function duplicateText(t) {
+  if (!t) return;
+  pushUndo();
+  const copy = cloneText(t);
+  copy.id = 'txt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  copy.x = t.x + 12; copy.yTop = t.yTop - 12;
+  state.texts.push(copy);
+  state.selectedTextId = copy.id; state.selectedImageId = null; state.selectedAnnId = null;
+  selectTool('hand');
+  renderTextObjects(); renderToolOptions();
+  toast('Copy made — drag it into place (Ctrl+D for another)');
+}
+// Ctrl+C / Ctrl+V for whole text boxes. The clipboard is internal (a clone of
+// the object, styling and all) so a box can be copied once and pasted onto any
+// page — repeated pastes on one page cascade so the copies don't stack.
+function copyTextBox() {
+  const t = selectedText(); if (!t) return;
+  state.textClipboard = cloneText(t);
+  toast('Text box copied — Ctrl+V pastes it, on this page or any other');
+}
+function pasteTextBox() {
+  const c = state.textClipboard; if (!c || !state.pdfDoc) return;
+  pushUndo();
+  const obj = cloneText(c);
+  obj.id = 'txt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  if (c.page === state.pageIndex) { obj.x = c.x + 12; obj.yTop = c.yTop - 12; }
+  obj.page = state.pageIndex;
+  state.textClipboard = cloneText(obj); // next paste offsets from this one
+  state.texts.push(obj);
+  state.selectedTextId = obj.id; state.selectedImageId = null; state.selectedAnnId = null;
+  selectTool('hand');
+  renderTextObjects(); renderToolOptions();
+  toast('Pasted');
+}
+// In-place editing, the way a word processor does it: the original block hides
+// while the editor sits exactly over it (both visible at once looked doubled
+// and blurry), and every keystroke updates the object live. Ctrl+Enter or a
+// click elsewhere keeps the result; Esc puts the original words back.
 function editTextObject(t, box) {
   if (state.tool !== 'hand' && state.tool !== 'text') return;
-  const inp = document.createElement('input');
-  inp.type = 'text'; inp.className = 'float-input'; inp.dir = 'auto';
-  inp.value = t.text;
-  inp.style.left = box.style.left; inp.style.top = box.style.top;
-  inp.style.fontSize = box.style.fontSize; inp.style.color = t.color;
-  els.pageWrap.appendChild(inp);
-  let done = false;
-  setTimeout(() => { inp.focus(); inp.select(); }, 0);
+  const geom = { left: box.offsetLeft, top: box.offsetTop }; // capture before re-render detaches `box`
+  const original = t.text;
+  let snapped = false; // one undo snapshot for the whole editing session
+  state.editingTextId = t.id;
+  renderTextObjects(); // hides the block so the editor is the only copy on screen
   const finish = () => {
-    if (done) return; done = true;
-    const v = inp.value; inp.remove();
-    if (v.trim() && v !== t.text) { pushUndo(); t.text = v; }
-    renderTextObjects();
+    state.editingTextId = null;
+    renderTextObjects(); renderToolOptions();
   };
-  inp.addEventListener('keydown', (e) => {
-    e.stopPropagation();
-    if (e.key === 'Enter') { e.preventDefault(); finish(); }
-    else if (e.key === 'Escape') { done = true; inp.remove(); }
+  openTextEditor({
+    left: geom.left, top: geom.top,
+    sizePx: t.size * state.scale, color: t.color,
+    lineHeight: t.lineHeight || 1.25, align: t.align, rot: t.rot || 0,
+    scaleX: t.scaleX || 1, scaleY: t.scaleY || 1,
+    bold: t.bold, italic: t.italic, value: t.text,
+    onInput: (v) => {
+      if (v === t.text) return;
+      if (!snapped) { pushUndo(); snapped = true; } // snapshots the pre-edit text
+      t.text = v;
+    },
+    onCommit: (v) => {
+      if (!v.trim()) t.text = original; // an emptied box keeps its old words rather than vanishing
+      finish();
+    },
+    onCancel: () => { t.text = original; finish(); },
   });
-  inp.addEventListener('blur', finish);
 }
 function deleteText(t) {
   pushUndo();
@@ -1794,9 +2141,12 @@ async function applyTexts(bytes, texts) {
   if (needUni && (!opts.fontkit || !opts.fontBytes)) {
     throw new Error('Hebrew text support files failed to load (fontkit / bundled font)');
   }
-  return ops.stampText(PDFLib, bytes, texts.map((t) => (
-    { page: t.page, x: t.x, y: t.yTop - t.size, text: t.text, size: t.size, color: t.color }
-  )), opts);
+  return ops.stampText(PDFLib, bytes, texts.map((t) => ({
+    page: t.page, x: t.x, y: t.yTop - t.size, text: t.text, size: t.size, color: t.color,
+    rot: t.rot || 0, align: t.align || 'auto', lineHeight: t.lineHeight || 1.25,
+    opacity: t.opacity == null ? 1 : t.opacity, bold: !!t.bold, italic: !!t.italic,
+    scaleX: t.scaleX || 1, scaleY: t.scaleY || 1,
+  })), opts);
 }
 // Bake every live overlay (highlights + ink + text + images) into a byte copy.
 async function applyOverlays(bytes) {
@@ -2156,6 +2506,16 @@ document.addEventListener('keydown', (e) => {
   else if (!state.pdfDoc) return;
   else if (mod && (e.code === 'Equal' || e.key === '+')) { e.preventDefault(); zoom(0.15); }
   else if (mod && e.code === 'Minus') { e.preventDefault(); zoom(-0.15); }
+  else if (mod && e.code === 'KeyD' && !typing && state.selectedTextId) { e.preventDefault(); duplicateText(selectedText()); }
+  // Ctrl+C only claims the keystroke when a text BOX is selected and no page
+  // text is highlighted — copying selected page text must keep working.
+  else if (mod && e.code === 'KeyC' && !typing && state.selectedTextId && !String(window.getSelection() || '').length) { copyTextBox(); }
+  else if (mod && e.code === 'KeyV' && !typing && state.textClipboard) { e.preventDefault(); pasteTextBox(); }
+  else if ((e.key === 'Enter' || e.key === 'F2') && !mod && !typing && state.selectedTextId && selectedText()) {
+    e.preventDefault();
+    const t = selectedText(); const box = textBoxEl(t);
+    if (box) editTextObject(t, box); // Enter / F2 opens the selected box for editing, Word-style
+  }
   else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') && (state.selectedImageId || state.selectedTextId || state.selectedAnnId)) { e.preventDefault(); nudgeSelected(e); }
   else if (e.key === 'PageDown' || e.key === 'ArrowRight') { if (state.pageIndex < state.pageCount - 1) { state.pageIndex++; renderPage(); } }
   else if (e.key === 'PageUp' || e.key === 'ArrowLeft') { if (state.pageIndex > 0) { state.pageIndex--; renderPage(); } }

@@ -176,7 +176,9 @@
   // and other scripts throw "WinAnsi cannot encode". Such text needs a bundled
   // Unicode font embedded via fontkit (opts below).
   const RTL_RE = /[\u0590-\u05FF\u0600-\u06FF\uFB1D-\uFB4F\uFE70-\uFEFF]/;
-  function needsUnicodeFont(s) { return /[^\u0020-\u00FF]/.test(s); }
+  // Line breaks and tabs are structure, not glyphs — they never force a font
+  // swap, so strip them before deciding whether the text is beyond WinAnsi.
+  function needsUnicodeFont(s) { return /[^\u0020-\u00FF]/.test(String(s == null ? '' : s).replace(/[\r\n\t]/g, '')); }
 
   // Bidi for drawing RTL text. Key fact: pdf-lib + fontkit already lay a single
   // Hebrew/Arabic run out right-to-left correctly on their own. So we must NOT
@@ -213,24 +215,100 @@
     });
     return out;
   }
-  // Draw one text item with RTL-aware layout onto a page.
-  function drawBidiText(page, item, size, font, color) {
-    const runs = bidiRuns(String(item.text ?? '')).reverse(); // rightmost = first logical run
-    let cx = item.x;
-    for (const r of runs) {
-      const s = r.dir === 'R' ? Array.from(r.s).map((ch) => BIDI_MIRROR[ch] || ch).join('') : r.s;
-      page.drawText(s, { x: cx, y: item.y, size, font, color });
-      cx += font.widthOfTextAtSize(s, size);
+  // ---- Text blocks ----------------------------------------------------------
+  // A text item is a BLOCK, not a single line. Its anchor is the block's
+  // top-left corner, at (x, y + size) — chosen so that a single unrotated line
+  // still puts its baseline exactly on `y`, which is the original contract.
+  // Everything else (extra lines, alignment, rotation) is measured from there.
+  const DEFAULT_LINE_HEIGHT = 1.25;
+  // Synthetic oblique, for faces with no italic cut of their own. It is pdf-lib's
+  // ySkew that shears the glyphs while leaving the baseline flat — xSkew tilts
+  // the baseline itself, which reads as a crooked line rather than as italic.
+  const ITALIC_SKEW = 12;         // degrees
+  const FAUX_BOLD = 0.03;         // pen offset as a fraction of the font size
+  const FAUX_BOLD_PASSES = [[0, 0], [1, 0], [0.5, 0.45]];
+
+  function splitLines(s) { return String(s ?? '').replace(/\r\n?/g, '\n').split('\n'); }
+  function measure(font, s, size) {
+    // A glyph the face cannot encode throws; a zero advance beats losing the draw.
+    try { return font.widthOfTextAtSize(s, size); } catch (e) { return 0; }
+  }
+  // Horizontal offset of one line inside the block. 'auto' follows the script.
+  function alignShift(align, blockWidth, lineWidth, rtl) {
+    const a = (!align || align === 'auto') ? (rtl ? 'right' : 'left') : align;
+    if (a === 'center') return (blockWidth - lineWidth) / 2;
+    if (a === 'right') return blockWidth - lineWidth;
+    return 0;
+  }
+  // Split one line into the pieces to draw, left to right. RTL lines are laid
+  // out run-by-run (see bidiRuns); everything else is a single piece.
+  function linePieces(line, rtl) {
+    if (!rtl) return [line];
+    return bidiRuns(line).reverse().map((r) => (r.dir === 'R'
+      ? Array.from(r.s).map((ch) => BIDI_MIRROR[ch] || ch).join('')
+      : r.s));
+  }
+  // Draw one text block. `faux` asks for synthetic bold/italic, needed only when
+  // the face has no real bold/italic cut of its own (the bundled Hebrew font).
+  // Rotation and the non-uniform stretch (scaleX / scaleY, from the mid-edge
+  // handles) are applied as one transformation matrix about the block's
+  // top-left anchor, so glyphs genuinely widen or tallen rather than reflow.
+  function drawTextBlock(PDFLib, page, it, size, font, color, faux) {
+    const raw = String(it.text ?? '');
+    const rtl = RTL_RE.test(raw);
+    const rot = Number(it.rot) || 0;
+    const rad = rot * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+    const sx = Number(it.scaleX) || 1, sy = Number(it.scaleY) || 1;
+    const lh = (Number(it.lineHeight) || DEFAULT_LINE_HEIGHT) * size;
+    const opacity = it.opacity == null ? 1 : Math.max(0, Math.min(1, Number(it.opacity)));
+    const skew = (faux && faux.italic) ? ITALIC_SKEW : 0;
+    const boldPen = (faux && faux.bold) ? size * FAUX_BOLD : 0;
+    const lines = splitLines(raw);
+    const widths = lines.map((l) => measure(font, l, size));
+    const blockWidth = widths.reduce((m, w) => Math.max(m, w), 0);
+    const ax = it.x, ay = it.y + size; // block top-left = the transform's pivot
+    // (ox, oy) is an offset inside the block's own upright frame, y growing up.
+    const useMatrix = rot !== 0 || sx !== 1 || sy !== 1;
+    let emit;
+    if (useMatrix) {
+      // cm = T(anchor) · R(rot) · S(sx, sy): local offsets in, page space out.
+      page.pushOperators(
+        PDFLib.pushGraphicsState(),
+        PDFLib.concatTransformationMatrix(cos * sx, sin * sx, -sin * sy, cos * sy, ax, ay)
+      );
+      emit = (s, ox, oy) => page.drawText(s, { x: ox, y: oy, size, font, color, opacity, ySkew: PDFLib.degrees(skew) });
+    } else {
+      emit = (s, ox, oy) => page.drawText(s, { x: ax + ox, y: ay + oy, size, font, color, opacity, ySkew: PDFLib.degrees(skew) });
     }
+    lines.forEach((line, i) => {
+      let ox = alignShift(it.align, blockWidth, widths[i], rtl);
+      const oy = -(size + i * lh);
+      for (const piece of linePieces(line, rtl)) {
+        if (piece) {
+          if (boldPen) for (const [bx, by] of FAUX_BOLD_PASSES) emit(piece, ox + bx * boldPen, oy - by * boldPen);
+          else emit(piece, ox, oy);
+        }
+        ox += measure(font, piece, size);
+      }
+    });
+    if (useMatrix) page.pushOperators(PDFLib.popGraphicsState());
   }
 
-  // items: [{ page, x, y, text, size, color }]  (y is baseline, bottom-left origin)
+  // items: [{ page, x, y, text, size, color, rot, align, lineHeight, opacity,
+  //           bold, italic, scaleX, scaleY }] — PDF space, y is the first
+  // line's baseline; scaleX/scaleY stretch the glyphs about the anchor.
+  // `text` may contain newlines. rot is degrees counter-clockwise about the
+  // block's top-left corner. align is 'auto' | 'left' | 'center' | 'right'.
   // opts (optional): { fontkit, fontBytes } — a fontkit instance plus TTF bytes
   // for a Unicode font; required when any item contains non-WinAnsi characters.
   async function stampText(PDFLib, bytes, items, opts) {
     const doc = await load(PDFLib, bytes);
-    const font = await doc.embedFont(PDFLib.StandardFonts.Helvetica);
     let uniFont = null;
+    const std = {};
+    const standard = async (name) => {
+      if (!std[name]) std[name] = await doc.embedFont(PDFLib.StandardFonts[name]);
+      return std[name];
+    };
     const wantsUnicode = items.some((it) => needsUnicodeFont(String(it.text ?? '')));
     if (wantsUnicode) {
       if (!opts || !opts.fontkit || !opts.fontBytes) {
@@ -241,15 +319,21 @@
     }
     for (const it of items) {
       const page = doc.getPage(it.page);
-      const raw = String(it.text ?? '');
-      const useUni = needsUnicodeFont(raw);
       const size = it.size || 14;
       const color = rgb(PDFLib, it.color || '#111111');
-      if (useUni && RTL_RE.test(raw)) {
-        drawBidiText(page, it, size, uniFont, color); // RTL-aware, run-by-run
+      let font, faux;
+      if (needsUnicodeFont(String(it.text ?? ''))) {
+        // We bundle a single Rubik cut, so bold/italic have to be synthesised.
+        font = uniFont;
+        faux = { bold: !!it.bold, italic: !!it.italic };
       } else {
-        page.drawText(raw, { x: it.x, y: it.y, size, font: useUni ? uniFont : font, color });
+        // Latin gets the real Helvetica cuts — far cleaner than faking them.
+        font = await standard(it.bold && it.italic ? 'HelveticaBoldOblique'
+          : it.bold ? 'HelveticaBold'
+            : it.italic ? 'HelveticaOblique' : 'Helvetica');
+        faux = null;
       }
+      drawTextBlock(PDFLib, page, it, size, font, color, faux);
     }
     return doc.save();
   }
@@ -518,6 +602,7 @@
     // text helpers (exported mainly for tests)
     needsUnicodeFont,
     bidiRuns,
+    DEFAULT_LINE_HEIGHT,
     buildDocx,
   };
 });

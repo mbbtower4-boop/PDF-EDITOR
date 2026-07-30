@@ -198,6 +198,40 @@ async function pageCount(bytes) {
   check('stampText embeds Hebrew (valid pdf, 3 pages)', (await pageCount(heStamped)) === 3);
   check('stampText Hebrew grew the file (font subset embedded)', heStamped.length > a.length + 2000);
 
+  // ---- Text blocks: multi-line, rotation, alignment, weight ----------------
+  const multi = await ops.stampText(PDFLib, a, [{
+    page: 0, x: 40, y: 700, size: 12, color: '#111111',
+    text: 'first line\nsecond line\nthird line', lineHeight: 1.5, align: 'center',
+  }]);
+  check('stampText draws a multi-line block', (await pageCount(multi)) === 3);
+  // Three lines must emit more content than one — the extra Tj operators show up
+  // as a bigger content stream even after compression.
+  const oneLine = await ops.stampText(PDFLib, a, [
+    { page: 0, x: 40, y: 700, size: 12, color: '#111111', text: 'first line' }]);
+  check('multi-line block writes more than a single line', multi.length > oneLine.length);
+  const spun = await ops.stampText(PDFLib, a, [
+    { page: 0, x: 200, y: 400, size: 18, color: '#d62828', text: 'angled', rot: 35 }]);
+  check('stampText rotates a block', (await pageCount(spun)) === 3);
+  const styled = await ops.stampText(PDFLib, a, [
+    { page: 0, x: 40, y: 300, size: 14, color: '#111111', text: 'bold italic', bold: true, italic: true },
+    { page: 0, x: 40, y: 280, size: 14, color: '#111111', text: 'faded', opacity: 0.4 }]);
+  check('stampText handles bold/italic/opacity', (await pageCount(styled)) === 3);
+  // Mid-edge stretch: non-uniform scale must produce a valid PDF and actually
+  // emit a transformation matrix (the content stream grows vs the plain draw).
+  const stretched = await ops.stampText(PDFLib, a, [
+    { page: 0, x: 40, y: 700, size: 12, color: '#111111', text: 'wide words', scaleX: 2.5 },
+    { page: 0, x: 40, y: 650, size: 12, color: '#111111', text: 'tall words', scaleY: 1.8 },
+    { page: 0, x: 40, y: 600, size: 12, color: '#111111', text: 'both + spin', scaleX: 1.5, scaleY: 0.7, rot: 30 }]);
+  check('stampText stretches width/height (valid pdf)', (await pageCount(stretched)) === 3);
+  // Hebrew keeps its RTL run layout inside a rotated multi-line block.
+  const heBlock = await ops.stampText(
+    PDFLib, a,
+    [{ page: 0, x: 60, y: 500, size: 15, color: '#1d3557', rot: -20, bold: true,
+       text: 'כביש 40 מזרח\nתאריך 09/07/2026' }],
+    { fontkit, fontBytes }
+  );
+  check('stampText rotates a multi-line Hebrew block', (await pageCount(heBlock)) === 3);
+
   // ---- DOCX (Word) export ---------------------------------------------------
   const docx = ops.buildDocx([
     { text: 'Hello World', rtl: false },
