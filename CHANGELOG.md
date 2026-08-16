@@ -1,5 +1,10 @@
 # Paperweight — Changelog
 
+## v1.21.0 — 2026-08-16
+- **Merge images and PDFs into one file.** The Insert PDF dialog now accepts **PNG/JPG images alongside PDFs** — pick any mix in one go and each image becomes a full A4 page (landscape when the image is wider than tall, fitted and centred), inserted wherever you chose. Works the same in merge order.
+- **Images can start a document too.** Dropping image files onto the window with **no document open** builds a brand-new PDF from them, one image per page — handy for turning a folder of scans or photos into a single PDF. (With a document open, dropping an image still places it ON the current page, as before.)
+- File type is detected from the bytes, not the file name, so a misnamed file still does the right thing.
+
 ## v1.20.0 — 2026-07-30
 - **Stretch text boxes from the sides.** Every selected text box now has four mid-edge handles alongside the corner ones: dragging a **side** handle changes only the width (the letters genuinely widen or squeeze), dragging **top/bottom** changes only the height — so you can affect one dimension without touching the other. The opposite edge stays pinned while you drag, it works at any rotation, and the corner handles still resize everything proportionally.
 - The stretch is baked into the PDF exactly as previewed (a real transformation matrix in the page content, not a re-flow), and the in-place editor opens with the same stretch so editing a widened box still lines up perfectly.

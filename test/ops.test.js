@@ -223,6 +223,21 @@ async function pageCount(bytes) {
     { page: 0, x: 40, y: 650, size: 12, color: '#111111', text: 'tall words', scaleY: 1.8 },
     { page: 0, x: 40, y: 600, size: 12, color: '#111111', text: 'both + spin', scaleX: 1.5, scaleY: 0.7, rot: 30 }]);
   check('stampText stretches width/height (valid pdf)', (await pageCount(stretched)) === 3);
+
+  // ---- Images as pages (merge PNG/JPG with PDFs) ----------------------------
+  check('sniffKind detects pdf', ops.sniffKind(a) === 'pdf');
+  check('sniffKind detects png', ops.sniffKind(onePxPng) === 'png');
+  const imgPdf = await ops.wrapImageAsPdf(PDFLib, onePxPng);
+  check('wrapImageAsPdf makes a 1-page pdf', (await pageCount(imgPdf)) === 1);
+  {
+    const doc = await PDFLib.PDFDocument.load(imgPdf);
+    const { width, height } = doc.getPage(0).getSize();
+    check('image page is A4 portrait', Math.abs(width - 595.28) < 0.1 && Math.abs(height - 841.89) < 0.1);
+  }
+  const mixedIns = await ops.insertPdfsAt(PDFLib, a, [onePxPng, b], 1);
+  check('insertPdfsAt accepts an image among PDFs', (await pageCount(mixedIns)) === 3 + 1 + 2);
+  const mixedMerge = await ops.mergePdfs(PDFLib, [onePxPng, a, onePxPng]);
+  check('mergePdfs builds from images + pdfs', (await pageCount(mixedMerge)) === 1 + 3 + 1);
   // Hebrew keeps its RTL run layout inside a rotated multi-line block.
   const heBlock = await ops.stampText(
     PDFLib, a,

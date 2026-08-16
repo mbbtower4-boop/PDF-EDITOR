@@ -59,9 +59,13 @@ ipcMain.handle('open-pdf', async () => {
 
 ipcMain.handle('open-pdfs', async () => {
   const res = await dialog.showOpenDialog(mainWindow, {
-    title: 'Choose PDFs to append',
+    title: 'Choose PDFs or images to insert',
     properties: ['openFile', 'multiSelections'],
-    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    filters: [
+      { name: 'PDF & images', extensions: ['pdf', 'png', 'jpg', 'jpeg'] },
+      { name: 'PDF', extensions: ['pdf'] },
+      { name: 'Images', extensions: ['png', 'jpg', 'jpeg'] },
+    ],
   });
   if (res.canceled || !res.filePaths.length) return null;
   const out = [];

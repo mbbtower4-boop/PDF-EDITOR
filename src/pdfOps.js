@@ -42,11 +42,42 @@
   async function mergePdfs(PDFLib, listOfBytes) {
     const out = await PDFLib.PDFDocument.create();
     for (const bytes of listOfBytes) {
-      const src = await load(PDFLib, bytes);
+      const src = await load(PDFLib, await normalizeToPdf(PDFLib, bytes));
       const pages = await out.copyPages(src, src.getPageIndices());
       pages.forEach((p) => out.addPage(p));
     }
     return out.save();
+  }
+
+  // ---- Images as pages -------------------------------------------------------
+  // Merge/insert accept PNG/JPG files alongside PDFs: an image becomes one A4
+  // page (landscape if the image is wider than tall), fitted and centred.
+  function sniffKind(bytes) {
+    const b = toBytes(bytes);
+    if (b.length >= 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return 'pdf'; // %PDF
+    if (b.length >= 4 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'png';
+    if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'jpg';
+    return 'unknown';
+  }
+  async function wrapImageAsPdf(PDFLib, bytes) {
+    const doc = await PDFLib.PDFDocument.create();
+    const img = await embedImage(doc, bytes);
+    const A4 = [595.28, 841.89];
+    const landscape = img.width > img.height;
+    const pw = landscape ? A4[1] : A4[0], ph = landscape ? A4[0] : A4[1];
+    const margin = 24;
+    const k = Math.min((pw - margin * 2) / img.width, (ph - margin * 2) / img.height);
+    const w = img.width * k, h = img.height * k;
+    doc.addPage([pw, ph]).drawImage(img, { x: (pw - w) / 2, y: (ph - h) / 2, width: w, height: h });
+    return doc.save();
+  }
+  // Anything merge/insert receives goes through here. Unknown kinds fall
+  // through to the PDF parser untouched — some real PDFs hide %PDF behind a few
+  // junk bytes, and pdf-lib copes with that where a strict sniff would not.
+  async function normalizeToPdf(PDFLib, bytes) {
+    const kind = sniffKind(bytes);
+    if (kind === 'png' || kind === 'jpg') return wrapImageAsPdf(PDFLib, bytes);
+    return toBytes(bytes);
   }
 
   // ---- Build a new document from an explicit ordered list of page indices ----
@@ -410,8 +441,9 @@
     return { width: img.width, height: img.height };
   }
 
-  // Insert every page of each PDF in `listOfBytes` into `baseBytes` starting at
-  // `position` (0 = before page 1, pageCount = after the last page).
+  // Insert every page of each file in `listOfBytes` into `baseBytes` starting
+  // at `position` (0 = before page 1, pageCount = after the last page). Items
+  // may be PDFs or PNG/JPG images — an image becomes one full page.
   async function insertPdfsAt(PDFLib, baseBytes, listOfBytes, position) {
     const base = await load(PDFLib, baseBytes);
     const total = base.getPageCount();
@@ -424,7 +456,7 @@
     const out = await PDFLib.PDFDocument.create();
     (await out.copyPages(base, before)).forEach((p) => out.addPage(p));
     for (const bytes of listOfBytes) {
-      const src = await load(PDFLib, bytes);
+      const src = await load(PDFLib, await normalizeToPdf(PDFLib, bytes));
       (await out.copyPages(src, src.getPageIndices())).forEach((p) => out.addPage(p));
     }
     (await out.copyPages(base, after)).forEach((p) => out.addPage(p));
@@ -598,6 +630,8 @@
     stampImages,
     stampManualOps,
     imageSize,
+    sniffKind,
+    wrapImageAsPdf,
     applyEdits,
     // text helpers (exported mainly for tests)
     needsUnicodeFont,

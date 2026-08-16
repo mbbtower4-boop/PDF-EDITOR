@@ -2576,7 +2576,8 @@ document.addEventListener('drop', async (e) => {
   const images = all.filter(isImageFile);
   if (pdfs.length) { await dropPdfs(pdfs); return; }
   if (!images.length) return; // internal (thumbnail) drop, or nothing usable — let it be
-  if (!state.pdfDoc) { toast('Open a PDF first, then drop the image', true); return; }
+  // No document open: the dropped images BECOME the document, one per page.
+  if (!state.pdfDoc) { await openImagesAsDoc(images); return; }
   await dropImages(images, e.clientX, e.clientY);
 }, true);
 
@@ -2620,6 +2621,37 @@ async function dropPdfs(files) {
       await reloadAfterEdit({ rebuildForm: true });
       toast(list.length === 1 ? 'PDF appended at the end' : list.length + ' PDFs appended at the end');
     }
+  } catch (err) { toast(err.message, true); } finally { hideBusy(); }
+}
+
+// Dropped images with no document open: build a fresh PDF out of them, one
+// image per A4 page (mergePdfs wraps each image via the engine).
+async function openImagesAsDoc(files) {
+  showBusy(files.length === 1 ? 'Creating PDF…' : 'Creating PDF from ' + files.length + ' images…');
+  try {
+    const list = [];
+    for (const f of files) {
+      try { list.push(new Uint8Array(await f.arrayBuffer())); }
+      catch (err) { toast('Could not read ' + f.name, true); }
+    }
+    if (!list.length) return;
+    state.bytes = await ops.mergePdfs(PDFLib, list);
+    state.name = (files[0].name || 'images').replace(/\.(png|jpe?g)$/i, '') + '.pdf';
+    state.undo = [];
+    state.images = []; state.texts = []; state.highlights = []; state.inks = []; state.manualMarks = [];
+    state.selectedImageId = null; state.selectedTextId = null; state.selectedAnnId = null;
+    state.editingTextId = null;
+    state.selectedPages.clear();
+    els.undo.disabled = true;
+    state.pageIndex = 0;
+    state.scale = 0;
+    await loadDoc({ rebuildForm: true, fit: true });
+    els.emptyState.hidden = true;
+    els.stage.hidden = false;
+    setDocActionsEnabled(true);
+    els.docName.textContent = state.name;
+    selectTool('hand');
+    toast(list.length === 1 ? 'PDF created from the image' : 'PDF created — ' + list.length + ' images, one per page');
   } catch (err) { toast(err.message, true); } finally { hideBusy(); }
 }
 

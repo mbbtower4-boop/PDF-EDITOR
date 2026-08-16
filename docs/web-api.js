@@ -110,7 +110,8 @@
     },
 
     openPdfs: async () => {
-      const files = await pickFiles('application/pdf,.pdf', true);
+      // PDFs and images together: the engine turns each image into a full page.
+      const files = await pickFiles('application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg', true);
       if (!files.length) return null;
       return Promise.all(files.map(fileToRecord));
     },
