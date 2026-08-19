@@ -111,15 +111,28 @@
     return buildFromOrder(PDFLib, bytes, keep);
   }
 
-  // ---- Rotate a page by a multiple of 90 degrees ----------------------------
-  async function rotatePage(PDFLib, bytes, pageIndex, deltaDegrees) {
+  // ---- Rotate pages by a multiple of 90 degrees -----------------------------
+  // The delta is signed and relative to whatever rotation the page already
+  // carries, so repeated quarter-turns accumulate the way a reader expects.
+  async function rotatePages(PDFLib, bytes, pageIndices, deltaDegrees) {
     const doc = await load(PDFLib, bytes);
-    const page = doc.getPage(pageIndex);
-    const current = page.getRotation().angle;
-    let next = (current + deltaDegrees) % 360;
-    if (next < 0) next += 360;
-    page.setRotation(PDFLib.degrees(next));
+    const total = doc.getPageCount();
+    const seen = new Set();
+    for (const i of pageIndices) {
+      if (!Number.isInteger(i) || i < 0 || i >= total) {
+        throw new Error(`Page index out of range: ${i} (document has ${total} pages)`);
+      }
+      if (seen.has(i)) continue; // a repeated index must not turn twice
+      seen.add(i);
+      const page = doc.getPage(i);
+      let next = (page.getRotation().angle + deltaDegrees) % 360;
+      if (next < 0) next += 360;
+      page.setRotation(PDFLib.degrees(next));
+    }
     return doc.save();
+  }
+  function rotatePage(PDFLib, bytes, pageIndex, deltaDegrees) {
+    return rotatePages(PDFLib, bytes, [pageIndex], deltaDegrees);
   }
 
   // ---- Forms ----------------------------------------------------------------
@@ -246,6 +259,14 @@
     });
     return out;
   }
+  // A page's own /Rotate, as a counter-clockwise angle in user space. Stamping
+  // code adds this so overlays face the reader rather than the raw page axes.
+  function pageSpin(page) {
+    let r = page.getRotation().angle % 360;
+    if (r < 0) r += 360;
+    return r;
+  }
+
   // ---- Text blocks ----------------------------------------------------------
   // A text item is a BLOCK, not a single line. Its anchor is the block's
   // top-left corner, at (x, y + size) — chosen so that a single unrotated line
@@ -364,7 +385,11 @@
             : it.italic ? 'HelveticaOblique' : 'Helvetica');
         faux = null;
       }
-      drawTextBlock(PDFLib, page, it, size, font, color, faux);
+      // A page carrying a /Rotate is shown turned, and anything drawn in its
+      // user space turns with it. Adding that angle back in keeps stamped text
+      // upright for the reader — where the on-screen editor put it.
+      const spun = pageSpin(page) ? Object.assign({}, it, { rot: (Number(it.rot) || 0) + pageSpin(page) }) : it;
+      drawTextBlock(PDFLib, page, spun, size, font, color, faux);
     }
     return doc.save();
   }
@@ -429,7 +454,25 @@
     for (const im of images) {
       const img = await embedImage(doc, im.bytes || im.pngBytes);
       const page = doc.getPage(im.page);
-      page.drawImage(img, { x: im.x, y: im.y, width: im.width, height: im.height });
+      const spin = pageSpin(page);
+      if (!spin) {
+        page.drawImage(img, { x: im.x, y: im.y, width: im.width, height: im.height });
+        continue;
+      }
+      // Turn the picture about the centre of its rectangle so it faces the
+      // reader. At a quarter turn the drawn width and height swap, since the
+      // rectangle is expressed in the page's own (unturned) axes.
+      const rad = spin * Math.PI / 180, c = Math.cos(rad), sn = Math.sin(rad);
+      const cx = im.x + im.width / 2, cy = im.y + im.height / 2;
+      const quarter = spin === 90 || spin === 270;
+      const dw = quarter ? im.height : im.width;
+      const dh = quarter ? im.width : im.height;
+      page.pushOperators(
+        PDFLib.pushGraphicsState(),
+        PDFLib.concatTransformationMatrix(c, sn, -sn, c, cx - (cx * c - cy * sn), cy - (cx * sn + cy * c))
+      );
+      page.drawImage(img, { x: cx - dw / 2, y: cy - dh / 2, width: dw, height: dh });
+      page.pushOperators(PDFLib.popGraphicsState());
     }
     return doc.save();
   }
@@ -622,6 +665,7 @@
     reorderPages,
     deletePages,
     rotatePage,
+    rotatePages,
     getFormFields,
     fillForm,
     stampText,

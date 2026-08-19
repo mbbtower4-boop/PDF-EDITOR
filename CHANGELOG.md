@@ -1,5 +1,13 @@
 # Paperweight — Changelog
 
+## v1.23.0 — 2026-08-19
+- **Rotate pages properly.** A page could only ever be turned one way, from a small ⟳ that appeared when hovering its thumbnail. Now there are **↺ ↻ buttons in the toolbar** that turn the page you are viewing, **[** and **]** do the same from the keyboard, each thumbnail has **both** directions, and selecting several pages (Ctrl/Shift+click) gives the selection bar its own ↺ ↻ to turn them all in one go. Quarter-turns accumulate, Undo steps back, and the rotation is written into the saved file.
+- **Fixed: anything you added to a turned page came out sideways.** Text and pictures were drawn against the page’s own axes rather than the reader’s, so a note typed on a rotated page baked in rotated — and a picture was squashed, because its proportions were fitted to the page’s width and height with those two swapped. Overlays are now turned to match the page: text stays upright and where you typed it, pictures keep their true proportions. Highlights and pen strokes were already correct and are unchanged.
+
+## v1.22.0 — 2026-08-16
+- **New Cover tool (tip-ex).** Drag a fully **opaque** box over anything you want hidden — a line of text, a stamp, a whole paragraph — on any page. White by default, with paper-tint presets, greys and black (plus the custom colour chip). While you drag, a faint dashed frame keeps a white box visible on the white page.
+- Until you save, a cover behaves like any live object: the Hand tool moves it, corner handles resize it, ✕ or Delete removes it, Ctrl+Z undoes it — and hovering reveals a white cover on a white page. **On save it bakes into the page** and permanently hides what is underneath.
+
 ## v1.21.0 — 2026-08-16
 - **Merge images and PDFs into one file.** The Insert PDF dialog now accepts **PNG/JPG images alongside PDFs** — pick any mix in one go and each image becomes a full A4 page (landscape when the image is wider than tall, fitted and centred), inserted wherever you chose. Works the same in merge order.
 - **Images can start a document too.** Dropping image files onto the window with **no document open** builds a brand-new PDF from them, one image per page — handy for turning a folder of scans or photos into a single PDF. (With a document open, dropping an image still places it ON the current page, as before.)

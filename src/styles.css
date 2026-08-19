@@ -335,7 +335,10 @@ body {
 .zoom-input:disabled { opacity: 0.4; }
 
 .tool-text .overlay-canvas { cursor: text; }
-.tool-highlight .overlay-canvas, .tool-pen .overlay-canvas, .tool-image .overlay-canvas { cursor: crosshair; }
+.tool-highlight .overlay-canvas, .tool-whiteout .overlay-canvas, .tool-pen .overlay-canvas, .tool-image .overlay-canvas { cursor: crosshair; }
+/* A white cover-up on a white page is invisible by design — give the Hand tool
+   a hover hint so it can still be found, moved, and deleted. */
+.tool-hand .ann-hl:hover:not(.selected) { outline: 1.5px dashed rgba(150,150,150,0.55); }
 .tool-sign .overlay-canvas { cursor: copy; }
 .tool-hand .overlay-canvas, .tool-hand .stage { cursor: grab; }
 /* While panning (Hand drag or right-button drag) the hand closes. */

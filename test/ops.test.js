@@ -74,6 +74,33 @@ async function pageCount(bytes) {
   const rsizes = await ops.getPageSizes(PDFLib, rotated);
   check('rotate sets page rotation to 90', rsizes[0].rotation === 90);
 
+  // Rotation is relative and accumulates; negatives wrap the short way round.
+  const rotBack = await ops.rotatePage(PDFLib, rotated, 0, -90);
+  check('rotate -90 returns to 0', (await ops.getPageSizes(PDFLib, rotBack))[0].rotation === 0);
+  const rotTwice = await ops.rotatePage(PDFLib, rotated, 0, 270);
+  check('rotate accumulates past 360', (await ops.getPageSizes(PDFLib, rotTwice))[0].rotation === 0);
+  const rotNeg = await ops.rotatePages(PDFLib, a, [0], -90);
+  check('rotatePages -90 wraps to 270', (await ops.getPageSizes(PDFLib, rotNeg))[0].rotation === 270);
+  // Several pages at once, in one pass.
+  const rotMany = await ops.rotatePages(PDFLib, a, [0, 2], 90);
+  const manySizes = await ops.getPageSizes(PDFLib, rotMany);
+  check('rotatePages turns every listed page', manySizes[0].rotation === 90 && manySizes[2].rotation === 90);
+  check('rotatePages leaves other pages alone', manySizes[1].rotation === 0);
+  // A repeated index must not double-turn, and a bad index must be refused.
+  const rotDup = await ops.rotatePages(PDFLib, a, [1, 1], 90);
+  check('rotatePages ignores a repeated index', (await ops.getPageSizes(PDFLib, rotDup))[1].rotation === 90);
+  let rotThrew = false;
+  try { await ops.rotatePages(PDFLib, a, [99], 90); } catch (e) { rotThrew = /out of range/i.test(e.message); }
+  check('rotatePages refuses an out-of-range page', rotThrew);
+  // Overlays stamped onto a turned page must be turned back so they face the
+  // reader. Both paths have to stay loadable and must differ from the flat one.
+  const turned = await ops.rotatePages(PDFLib, a, [0], 90);
+  const textOnTurned = await ops.stampText(PDFLib, turned, [
+    { page: 0, x: 40, y: 200, text: 'upright', size: 12, color: '#111111' }]);
+  check('stampText works on a rotated page', (await pageCount(textOnTurned)) === 3);
+  check('rotated page keeps its rotation after stamping',
+    (await ops.getPageSizes(PDFLib, textOnTurned))[0].rotation === 90);
+
   // form discovery
   const fields = await ops.getFormFields(PDFLib, a);
   const byName = Object.fromEntries(fields.map(f => [f.name, f]));
@@ -100,6 +127,9 @@ async function pageCount(bytes) {
   // highlight
   const hl = await ops.stampHighlights(PDFLib, a, [{ page: 0, x: 40, y: 245, width: 160, height: 24, color: '#ffd54a', opacity: 0.4 }]);
   check('stampHighlights returns valid pdf', (await pageCount(hl)) === 3);
+  // Opacity 1 = the cover-up (tip-ex) rectangle that hides content.
+  const cover = await ops.stampHighlights(PDFLib, a, [{ page: 0, x: 40, y: 245, width: 160, height: 24, color: '#ffffff', opacity: 1 }]);
+  check('stampHighlights opaque cover-up is valid', (await pageCount(cover)) === 3);
 
   // ink
   const ink = await ops.stampInk(PDFLib, a, [{ page: 0, points: [{ x: 40, y: 40 }, { x: 80, y: 60 }, { x: 120, y: 40 }], color: '#d62828', width: 2 }]);
@@ -112,6 +142,11 @@ async function pageCount(bytes) {
   );
   const withImg = await ops.stampImages(PDFLib, a, [{ page: 0, x: 40, y: 40, width: 80, height: 30, pngBytes: onePxPng }]);
   check('stampImages returns valid pdf', (await pageCount(withImg)) === 3);
+  const imgOnTurned = await ops.stampImages(PDFLib, turned, [
+    { page: 0, x: 40, y: 40, width: 80, height: 30, pngBytes: onePxPng }]);
+  check('stampImages works on a rotated page', (await pageCount(imgOnTurned)) === 3);
+  check('image stamp keeps the page rotation',
+    (await ops.getPageSizes(PDFLib, imgOnTurned))[0].rotation === 90);
 
   // applyEdits batch
   const batched = await ops.applyEdits(PDFLib, a, {

@@ -29,6 +29,7 @@ const state = {
   undo: [],            // Uint8Array snapshots
   // tool options
   highlightColor: '#ffd54a',
+  whiteoutColor: '#ffffff', // the cover-up (tip-ex) tool: an OPAQUE rectangle
   penColor: '#d62828',
   penWidth: 2.5,
   textColor: '#111111',
@@ -68,6 +69,7 @@ const els = {
   rail: $('rail'), thumbs: $('thumbs'), pageCount: $('pageCount'),
   selBar: $('selBar'), selCount: $('selCount'), selMove: $('selMove'),
   selMoveInput: $('selMoveInput'), selDelete: $('selDelete'), selClear: $('selClear'),
+  rotL: $('btnRotL'), rotR: $('btnRotR'), selRotL: $('selRotL'), selRotR: $('selRotR'),
   emptyState: $('emptyState'), stage: $('stage'), pageWrap: $('pageWrap'),
   pageCanvas: $('pageCanvas'), overlay: $('overlayCanvas'),
   imgLayer: $('imgLayer'), txtLayer: $('txtLayer'), annLayer: $('annLayer'),
@@ -106,7 +108,8 @@ function hideBusy() { els.busy.hidden = true; }
 const copyBytes = (u8) => u8.slice(); // pdf.js detaches buffers; always hand it a copy
 
 function setDocActionsEnabled(on) {
-  [els.save, els.merge, els.split, els.manualOp, els.zoomIn, els.zoomOut, els.gotoPage, els.zoomInput].forEach((b) => { b.disabled = !on; });
+  [els.save, els.merge, els.split, els.manualOp, els.zoomIn, els.zoomOut, els.gotoPage, els.zoomInput,
+    els.rotL, els.rotR].forEach((b) => { b.disabled = !on; });
   document.querySelectorAll('.tool').forEach((b) => { b.disabled = !on; });
 }
 
@@ -320,7 +323,8 @@ async function renderThumbs() {
     acts.className = 'thumb-actions';
     acts.innerHTML =
       `<button class="thumb-act move" title="Move to page…">⇅</button>` +
-      `<button class="thumb-act rot" title="Rotate 90°">⟳</button>` +
+      `<button class="thumb-act rotl" title="Rotate 90° left">↺</button>` +
+      `<button class="thumb-act rot" title="Rotate 90° right">↻</button>` +
       `<button class="thumb-act del" title="Delete page">✕</button>`;
     wrap.appendChild(acts);
 
@@ -348,7 +352,8 @@ async function renderThumbs() {
       state.pageIndex = i; renderPage();
     });
     acts.querySelector('.move').addEventListener('click', (e) => { e.stopPropagation(); promptMovePage(i); });
-    acts.querySelector('.rot').addEventListener('click', (e) => { e.stopPropagation(); rotatePage(i); });
+    acts.querySelector('.rotl').addEventListener('click', (e) => { e.stopPropagation(); rotatePages([i], -90); });
+    acts.querySelector('.rot').addEventListener('click', (e) => { e.stopPropagation(); rotatePages([i], 90); });
     acts.querySelector('.del').addEventListener('click', (e) => { e.stopPropagation(); deletePage(i); });
 
     attachThumbDnD(wrap);
@@ -496,14 +501,28 @@ async function deletePage(i) {
   } catch (e) { toast(e.message, true); } finally { hideBusy(); }
 }
 
-async function rotatePage(i) {
-  showBusy('Rotating…');
+// Turn one or more pages by a quarter (delta is signed: +90 = clockwise).
+// Every rotate goes through here, so the thumbnail buttons, the toolbar, the
+// multi-selection bar and the keyboard shortcuts all share one code path.
+async function rotatePages(indices, delta) {
+  const list = (indices || []).filter((i) => Number.isInteger(i) && i >= 0 && i < state.pageCount);
+  if (!list.length) return;
+  showBusy(list.length > 1 ? 'Rotating ' + list.length + ' pages…' : 'Rotating…');
   try {
     pushUndo(); await bakeAll();
-    const nb = await ops.rotatePage(PDFLib, state.bytes, i, 90);
-    state.bytes = nb;
+    state.bytes = await ops.rotatePages(PDFLib, state.bytes, list, delta);
     await reloadAfterEdit({});
+    if (list.length > 1) toast(list.length + ' pages rotated');
   } catch (e) { toast(e.message, true); } finally { hideBusy(); }
+}
+// What the toolbar buttons and shortcuts act on: the multi-selection when there
+// is one, otherwise just the page you are looking at.
+function pagesToRotate() {
+  return state.selectedPages.size ? selectedSorted() : [state.pageIndex];
+}
+function rotateCurrent(delta) {
+  if (!state.pdfDoc) return;
+  rotatePages(pagesToRotate(), delta);
 }
 
 // ---- Insert PDFs at a chosen position -------------------------------------
@@ -1185,6 +1204,10 @@ async function applyForm() {
 // ---- Tools ----------------------------------------------------------------
 const TOOL_OPTIONS = {
   highlight: () => optColorRow('Highlight', ['#ffd54a', '#aef0a1', '#9fd0ff', '#ffb3c1', '#ffa94d', '#d0bfff', '#63e6be', '#ff8787'], 'highlightColor'),
+  // Cover-up swatches: white plus common paper tints, then black for full
+  // redaction-style blocks. Fully opaque — it hides what's underneath.
+  whiteout: () => optColorRow('Cover-up', ['#ffffff', '#f8f6f0', '#f1efe9', '#e9e9e9', '#d9d9d9', '#111111'], 'whiteoutColor')
+        + '<span class="opt-label">Drag a box over what you want hidden — it bakes in on save.</span>',
   pen: () => optColorRow('Pen', ['#111111', '#d62828', '#1d3557', '#2a9d8f', '#e8590c', '#6741d9', '#2f9e44', '#1971c2', '#f08c00', '#e64980'], 'penColor')
         + optSlider('Width', 'penWidth', 1, 8, 0.5),
   text: () => optColorRow('Text', ['#111111', '#d62828', '#1d3557', '#2a9d8f', '#e8590c', '#6741d9', '#2f9e44', '#1971c2', '#ffffff'], 'textColor')
@@ -1421,7 +1444,7 @@ els.overlay.addEventListener('pointerdown', (e) => {
     startPan(e); // grab the page and drag to move the view
     return;
   }
-  if (state.tool === 'highlight') { drawing = true; startPt = p; els.overlay.setPointerCapture(e.pointerId); }
+  if (state.tool === 'highlight' || state.tool === 'whiteout') { drawing = true; startPt = p; els.overlay.setPointerCapture(e.pointerId); }
   else if (state.tool === 'pen') { drawing = true; penPts = [p]; els.overlay.setPointerCapture(e.pointerId); }
   else if (state.tool === 'image') { if (!state.pendingImage) { pickImage(); return; } drawing = true; startPt = p; els.overlay.setPointerCapture(e.pointerId); }
   else if (state.tool === 'text') { placeTextInput(p); }
@@ -1431,10 +1454,16 @@ els.overlay.addEventListener('pointermove', (e) => {
   if (!drawing) return;
   const p = overlayXY(e);
   const ctx = octx();
-  if (state.tool === 'highlight') {
+  if (state.tool === 'highlight' || state.tool === 'whiteout') {
     clearOverlay();
-    ctx.fillStyle = hexToRgba(state.highlightColor, 0.4);
+    // The cover-up previews fully opaque — that IS the point of it.
+    ctx.fillStyle = state.tool === 'whiteout' ? state.whiteoutColor : hexToRgba(state.highlightColor, 0.4);
     ctx.fillRect(Math.min(startPt.x, p.x), Math.min(startPt.y, p.y), Math.abs(p.x - startPt.x), Math.abs(p.y - startPt.y));
+    if (state.tool === 'whiteout') { // a faint frame so a white box is visible while dragging
+      ctx.strokeStyle = 'rgba(120,120,120,0.7)'; ctx.setLineDash([5, 4]); ctx.lineWidth = 1;
+      ctx.strokeRect(Math.min(startPt.x, p.x), Math.min(startPt.y, p.y), Math.abs(p.x - startPt.x), Math.abs(p.y - startPt.y));
+      ctx.setLineDash([]);
+    }
   } else if (state.tool === 'pen') {
     // Capture the browser's buffered "coalesced" points too: a single pointermove
     // can hide several intermediate positions on a fast stroke. Using them keeps
@@ -1460,7 +1489,7 @@ els.overlay.addEventListener('pointerup', async (e) => {
   if (!drawing) return;
   drawing = false;
   const p = overlayXY(e);
-  if (state.tool === 'highlight') await commitHighlight(startPt, p);
+  if (state.tool === 'highlight' || state.tool === 'whiteout') await commitHighlight(startPt, p);
   else if (state.tool === 'pen') await commitPen(penPts);
   else if (state.tool === 'image') await commitImage(startPt, p);
 });
@@ -1478,13 +1507,18 @@ async function commitHighlight(a, b) {
   clearOverlay();
   if (w < 2 || h < 2) return;
   pushUndo();
+  // The cover-up (tip-ex) tool rides the highlight machinery: same rectangle,
+  // same move/resize/delete/bake path — just fully opaque so it HIDES content.
+  const cover = state.tool === 'whiteout';
   state.highlights.push({
     id: 'hl' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     page: state.pageIndex,
     x: Math.min(x1, x2), y: Math.min(y1, y2), w, h,
-    color: state.highlightColor, opacity: 0.4,
+    color: cover ? state.whiteoutColor : state.highlightColor,
+    opacity: cover ? 1 : 0.4,
   });
   renderAnnObjects();
+  if (cover) toast('Covered — it hides this area for good once you save');
 }
 
 async function commitPen(points) {
@@ -1613,11 +1647,10 @@ function placeTextInput(p) {
 
 async function placeSignature(p) {
   if (!state.pendingSigPng) { openSigModal(); return; }
-  const vp = state.viewport;
-  const widthPt = 180;
-  const heightPt = widthPt / (state.pendingSigAspect || 3);
-  const [px, pyTop] = vp.convertToPdfPoint(p.x, p.y); // treat click as top-left
-  const rect = { page: state.pageIndex, x: px, y: pyTop - heightPt, width: widthPt, height: heightPt, pngBytes: state.pendingSigPng };
+  const wpx = 180 * pxPerPoint();                       // 180pt wide as seen on screen
+  const hpx = wpx / (state.pendingSigAspect || 3);
+  const r = screenRectToPdf(p.x, p.y, wpx, hpx);       // click is the top-left
+  const rect = { page: state.pageIndex, x: r.x, y: r.y, width: r.width, height: r.height, pngBytes: state.pendingSigPng };
   showBusy('Placing signature…');
   try {
     const nb = await ops.stampImages(PDFLib, state.bytes, [rect]);
@@ -1639,25 +1672,38 @@ async function pickImage() {
   toast('Drag a box on the page to place "' + res.name + '"');
 }
 
+// Map a rectangle drawn on SCREEN (page-relative px) to the PDF-space rect the
+// engine stamps. Mapping both corners through the viewport keeps it right on a
+// rotated page, where screen-down is no longer PDF-down and width/height swap.
+function screenRectToPdf(vx, vy, wpx, hpx) {
+  const vp = state.viewport;
+  const [x1, y1] = vp.convertToPdfPoint(vx, vy);
+  const [x2, y2] = vp.convertToPdfPoint(vx + wpx, vy + hpx);
+  return {
+    x: Math.min(x1, x2), y: Math.min(y1, y2),
+    width: Math.abs(x2 - x1), height: Math.abs(y2 - y1),
+  };
+}
+// Screen pixels per PDF point, for sizing defaults that are quoted in points.
+function pxPerPoint() { return state.scale || 1; }
+
 async function commitImage(a, b) {
   if (!state.pendingImage) { clearOverlay(); return; }
-  const vp = state.viewport;
-  const [x1, y1] = vp.convertToPdfPoint(a.x, a.y);
-  const [x2, y2] = vp.convertToPdfPoint(b.x, b.y);
-  const left = Math.min(x1, x2), right = Math.max(x1, x2);
-  const top = Math.max(y1, y2), bottom = Math.min(y1, y2);
   const ar = state.pendingImage.aspect || 1;
-  const rectW = right - left, rectH = top - bottom;
-  let drawW, drawH;
-  const tinyDrag = Math.abs(b.x - a.x) < 8 || Math.abs(b.y - a.y) < 8;
-  if (tinyDrag) { drawW = 200; drawH = 200 / ar; }        // a click => default size
-  else if (rectW / rectH > ar) { drawH = rectH; drawW = rectH * ar; } // fit within box
-  else { drawW = rectW; drawH = rectW / ar; }
-  const x = left, y = top - drawH;
+  // The aspect is fitted against the box as DRAWN ON SCREEN — fitting it in PDF
+  // space would squash the picture on a quarter-turned page, where the page's
+  // own width and height are swapped relative to what you dragged.
+  const boxW = Math.abs(b.x - a.x), boxH = Math.abs(b.y - a.y);
+  const tinyDrag = boxW < 8 || boxH < 8;
+  let wpx, hpx;
+  if (tinyDrag) { wpx = 200 * pxPerPoint(); hpx = wpx / ar; } // a click => default size
+  else if (boxW / boxH > ar) { hpx = boxH; wpx = boxH * ar; } // fit within box
+  else { wpx = boxW; hpx = boxW / ar; }
+  const r = screenRectToPdf(Math.min(a.x, b.x), Math.min(a.y, b.y), wpx, hpx);
   pushUndo();
   const obj = {
     id: 'img' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-    page: state.pageIndex, x, y, w: drawW, h: drawH,
+    page: state.pageIndex, x: r.x, y: r.y, w: r.width, h: r.height,
     bytes: state.pendingImage.bytes, aspect: ar,
   };
   state.images.push(obj);
@@ -2466,6 +2512,10 @@ els.zoomInput.addEventListener('blur', () => { if (state.pdfDoc) els.zoomInput.v
 
 // Multi-page selection bar (in the thumbnail rail)
 els.selDelete.addEventListener('click', deleteSelectedPages);
+els.rotL.addEventListener('click', () => rotateCurrent(-90));
+els.rotR.addEventListener('click', () => rotateCurrent(90));
+els.selRotL.addEventListener('click', () => rotatePages(selectedSorted(), -90));
+els.selRotR.addEventListener('click', () => rotatePages(selectedSorted(), 90));
 els.selClear.addEventListener('click', clearPageSelection);
 els.selMove.addEventListener('click', () => {
   els.selMoveInput.hidden = !els.selMoveInput.hidden;
@@ -2525,6 +2575,8 @@ document.addEventListener('keydown', (e) => {
     else deleteAnn(state.selectedAnnId);
   }
   else if (e.key === 'Delete' && state.selectedPages.size) deleteSelectedPages();
+  else if (!mod && e.key === '[') { e.preventDefault(); rotateCurrent(-90); }
+  else if (!mod && e.key === ']') { e.preventDefault(); rotateCurrent(90); }
   else if (e.code === 'KeyH') selectTool('hand');
 });
 
@@ -2656,7 +2708,6 @@ async function openImagesAsDoc(files) {
 }
 
 async function dropImages(files, clientX, clientY) {
-  const vp = state.viewport;
   const wrapRect = els.pageWrap.getBoundingClientRect();
   const overPage = clientX >= wrapRect.left && clientX <= wrapRect.right &&
                    clientY >= wrapRect.top && clientY <= wrapRect.bottom;
@@ -2671,19 +2722,19 @@ async function dropImages(files, clientX, clientY) {
       try { size = await ops.imageSize(PDFLib, bytes); }
       catch (err) { toast('Skipped a file that is not a valid PNG/JPG', true); continue; }
       const ar = (size.width / size.height) || 1;
-      const widthPt = 200, heightPt = widthPt / ar;
+      const wpx = 200 * pxPerPoint(), hpx = wpx / ar;   // 200pt wide as seen on screen
       let vx, vy; // drop point in page-relative pixels
       if (overPage) {
         vx = clientX - wrapRect.left + i * 16;
         vy = clientY - wrapRect.top + i * 16;
       } else { // dropped off the page -> centre of the current page
-        vx = wrapRect.width / 2 - (widthPt * state.scale) / 2 + i * 16;
-        vy = wrapRect.height / 2 - (heightPt * state.scale) / 2 + i * 16;
+        vx = wrapRect.width / 2 - wpx / 2 + i * 16;
+        vy = wrapRect.height / 2 - hpx / 2 + i * 16;
       }
-      const [px, pyTop] = vp.convertToPdfPoint(vx, vy); // treat as top-left
+      const r = screenRectToPdf(vx, vy, wpx, hpx);      // drop point is the top-left
       const obj = {
         id: 'img' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-        page: state.pageIndex, x: px, y: pyTop - heightPt, w: widthPt, h: heightPt, bytes, aspect: ar,
+        page: state.pageIndex, x: r.x, y: r.y, w: r.width, h: r.height, bytes, aspect: ar,
       };
       state.images.push(obj);
       state.selectedImageId = obj.id; state.selectedTextId = null;

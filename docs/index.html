@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob: data:; font-src 'self';" />
-  <meta name="app-version" content="1.21.0" />
+  <meta name="app-version" content="1.23.0" />
   <meta name="theme-color" content="#12151b" />
   <title>Paperweight — online PDF editor</title>
   <link rel="icon" href="assets/paperweight.ico" />
@@ -42,6 +42,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21h6"/><path d="M12.5 4.5l7 7-6.5 6.5H8l-2.5-2.5z"/><path d="M11 6l7 7"/></svg>
         <span>Highlight</span>
       </button>
+      <button class="tool" data-tool="whiteout" title="Cover up (tip-ex): drag an opaque box to hide anything">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="13" height="8" rx="1.5" transform="rotate(-20 9.5 13)"/><path d="M15 6l4 4"/><path d="M4 21h16"/></svg>
+        <span>Cover</span>
+      </button>
       <button class="tool" data-tool="pen" title="Freehand pen">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>
         <span>Pen</span>
@@ -63,6 +67,8 @@
     <div class="tbsep"></div>
 
     <div class="tbgroup page-ops">
+      <button id="btnRotL" class="tbtn ghost icon" title="Rotate this page 90° left  ( [ )" disabled>↺</button>
+      <button id="btnRotR" class="tbtn ghost icon" title="Rotate this page 90° right  ( ] )" disabled>↻</button>
       <button id="btnMerge" class="tbtn ghost" title="Insert other PDFs — or PNG/JPG images as pages — at a chosen position" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5"/><path d="M12 18v-6"/><path d="M9 15h6"/></svg>
         Insert PDF
@@ -102,6 +108,8 @@
       </div>
       <div id="selBar" class="sel-bar" hidden>
         <span id="selCount" class="sel-count">0 selected</span>
+        <button id="selRotL" class="tbtn icon" title="Rotate the selected pages 90° left">↺</button>
+        <button id="selRotR" class="tbtn icon" title="Rotate the selected pages 90° right">↻</button>
         <button id="selMove" class="tbtn" title="Move the selected pages to a position…">Move…</button>
         <button id="selDelete" class="tbtn danger" title="Delete the selected pages (Delete)">Delete</button>
         <button id="selClear" class="tbtn ghost icon" title="Clear selection">✕</button>
@@ -109,7 +117,7 @@
                placeholder="Move to page #, then Enter" hidden />
       </div>
       <div id="thumbs" class="thumbs"></div>
-      <p class="rail-hint muted">Drag to reorder. <b>Ctrl+click</b> (or Shift+click) picks several pages to move or delete together.</p>
+      <p class="rail-hint muted">Drag to reorder; hover a page for <b>↺ ↻</b> rotate, ⇅ move and ✕ delete. <b>Ctrl+click</b> (or Shift+click) picks several pages to rotate, move or delete together.</p>
     </aside>
 
     <!-- Center: the document ------------------------------------------ -->
@@ -174,13 +182,14 @@
           <h3>Quick guide</h3>
           <ul class="guide">
             <li><b>Highlight / Pen</b> — drag on the page. Each has preset colors plus a rainbow chip for any custom color. With the <b>Hand</b> tool, click a highlight or stroke to select it: drag to move, ✕ or Delete to erase, corners resize a highlight.</li>
+            <li><b>Cover (tip-ex)</b> — drag an <b>opaque</b> box over anything you want hidden: text, a stamp, a whole paragraph. White by default (paper tints and black available too); once you save it bakes into the page and the content underneath is covered. Until then the Hand tool can still move, resize, or delete it — hover to find a white box on a white page.</li>
             <li><b>Text</b> — click and type. <b>Enter starts a new line</b>, <b>Ctrl+Enter</b> finishes, Esc cancels — so one text box can hold a whole paragraph. <b>Hebrew and other languages are supported</b> (right-to-left is handled automatically). To edit later, <b>double-click</b> it with the Hand tool or select it and press <b>Enter</b> — it opens in place, crisp, with the caret at the end, and every keystroke updates the box live.</li>
             <li><b>Copying text boxes</b> — select one and press <b>Ctrl+C</b>, then <b>Ctrl+V</b> pastes an identical box (words, colour, size, angle — everything) on this page <b>or any other page</b>. <b>Ctrl+D</b> or the <b>⧉ Copy</b> button drops a copy right next to the original.</li>
             <li><b>Styling text</b> — select it with the <b>Hand</b> tool and the top bar gives you colour, size, <b>bold</b>, <i>italic</i>, alignment, <b>rotation</b>, line spacing and fade. Drag the round handle above the box to spin it (hold <b>Shift</b> to snap to 15°). <b>Corners</b> resize the whole box; the <b>mid-edge handles stretch one direction only</b> — sides for width, top/bottom for height.</li>
             <li><b>Image</b> — <b>drag an image file straight onto the page</b>, or use the Image tool and drag a box. With the <b>Hand</b> tool, drag to move or use the corners to resize.</li>
             <li><b>Sign</b> — draw a signature once, then click on the page to place it.</li>
             <li><b>Move around</b> — drag the page with the <b>Hand</b> tool, or hold the <b>right mouse button</b> with any tool. <b>Ctrl + wheel</b> zooms.</li>
-            <li><b>Pages</b> — drag thumbnails to reorder, or use a thumbnail's <b>⇅</b> to jump it to any page number. Each has rotate &amp; delete. <b>Ctrl+click</b> (or Shift+click) thumbnails to select several pages, then move them together (drag or "Move…") or delete them in one go.</li>
+            <li><b>Pages</b> — drag thumbnails to reorder, or use a thumbnail's <b>⇅</b> to jump it to any page number. Each has <b>↺ ↻ rotate</b> (90° left/right) and delete; the toolbar's <b>↺ ↻</b> turn the page you are viewing — or every selected page — and <b>[</b> / <b>]</b> do the same from the keyboard. Rotation is saved into the file. <b>Ctrl+click</b> (or Shift+click) thumbnails to select several pages, then move them together (drag or "Move…") or delete them in one go.</li>
             <li><b>Insert PDF</b> adds other PDFs at the beginning, end, or after a chosen page — you can pick <b>several files at once</b> in the dialog, or simply <b>drop PDF files onto the window</b> to append them. <b>PNG/JPG images are welcome too</b>: each becomes a full A4 page. Dropping images with <b>no document open</b> builds a brand-new PDF out of them.</li>
             <li><b>Extract</b> saves a page range to a new file.</li>
           </ul>
