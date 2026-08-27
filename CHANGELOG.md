@@ -1,5 +1,20 @@
 # Paperweight — Changelog
 
+## v1.25.0 — 2026-08-27
+- **The signature is finally movable.** Clicking the page used to stamp it permanently at that exact spot — land a little off and the only way out was Undo. It now arrives as a live object like everything else: **drag it into position, resize by the corners, ✕ or Delete removes it**, and it is written into the file on save. Works correctly on rotated pages too.
+- **The signature pad draws better.** A tap leaves a dot (dotted letters and geresh marks used to vanish — the pad only drew between movements), fast strokes come out smooth instead of jagged (coalesced pointer events, same as the Pen), and the pad renders at double resolution so the placed signature is crisper.
+- **Long documents feel much faster.** Page thumbnails render in parallel instead of one-by-one, and operations that touch specific pages — rotating, most visibly — refresh only those thumbnails instead of rebuilding all of them (rotating one page of a 30-page file redraws 1 thumbnail, not 30).
+- Undo now caps its memory by size as well as by step count, so twenty snapshots of a very large scan can no longer hold a gigabyte of RAM.
+
+## v1.24.1 — 2026-08-27
+- **Fixed: a numbered file opened by drag-and-drop kept its old numbers frozen.** The Open button restored the numbering rule from a saved file, but dropping the file onto the window did not — so its numbers stayed as plain marks that a later re-numbering would not clean up, and a dropped file could even inherit the previous document’s rule. Both drop paths now behave exactly like Open: the rule comes back live, and a new document starts with no rule.
+
+## v1.24.0 — 2026-08-21
+- **Page numbering.** A new **Numbering** button puts numbers on the document: pick the corner, the style (**1**, **- 1 -**, **1 / 12**, **Page 1 of 12**, **עמוד 1 מתוך 12**, or your own template using `{n}` and `{total}`), which page counting starts on — so a cover page can stay unnumbered — what the first number is, plus size, colour and distance from the edge. The numbers show on the page as you work and are written into the file when you save.
+- **The numbers look after themselves.** Numbering is stored as a **rule**, not as stamped-on marks: it is recomputed from the current page list every time the file is written. Add a page, delete one, move one, rotate one — the numbers correct themselves, with no doubled-up or stale numbers to clean off. Re-open a file numbered here and the rule comes back with it, so the number → add a page → number again cycle can repeat as often as you like.
+- Under the hood each number goes into its own tagged content stream, and the rule is kept in the PDF catalog; re-numbering clears the previous pass first (including the font it embedded), so repeated runs replace rather than accumulate. The rule also travels with the document through insert, reorder and delete.
+- Numbers land where the reader expects them on a rotated page — along the visible bottom edge, the right way up.
+
 ## v1.23.0 — 2026-08-19
 - **Rotate pages properly.** A page could only ever be turned one way, from a small ⟳ that appeared when hovering its thumbnail. Now there are **↺ ↻ buttons in the toolbar** that turn the page you are viewing, **[** and **]** do the same from the keyboard, each thumbnail has **both** directions, and selecting several pages (Ctrl/Shift+click) gives the selection bar its own ↺ ↻ to turn them all in one go. Quarter-turns accumulate, Undo steps back, and the rotation is written into the saved file.
 - **Fixed: anything you added to a turned page came out sideways.** Text and pictures were drawn against the page’s own axes rather than the reader’s, so a note typed on a rotated page baked in rotated — and a picture was squashed, because its proportions were fitted to the page’s width and height with those two swapped. Overlays are now turned to match the page: text stays upright and where you typed it, pictures keep their true proportions. Highlights and pen strokes were already correct and are unchanged.

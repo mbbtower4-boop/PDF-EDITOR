@@ -55,6 +55,10 @@ const state = {
   inks: [],            // live pen strokes (baked on save)
   manualMarks: [],     // live Inbar manual-op marks (baked on save; deletable/undoable)
   selectedAnnId: null,
+  // Page numbering is a RULE, never baked into state.bytes during a session:
+  // it is written on save and recomputed from the current page list, so adding,
+  // deleting, moving or rotating pages simply renumbers.
+  numbering: null,     // { format, position, color, startAt, fromPage, size, margin }
   selectedPages: new Set(), // multi-selected page indices (Ctrl/Shift+click in the rail)
   thumbAnchor: 0,           // anchor index for Shift+click range selection
 };
@@ -83,6 +87,10 @@ const els = {
   rangeCancel: $('rangeCancel'), rangeGo: $('rangeGo'),
   insertModal: $('insertModal'), insertAfter: $('insertAfter'),
   insertCancel: $('insertCancel'), insertGo: $('insertGo'),
+  number: $('btnNumber'), numberModal: $('numberModal'), numFormat: $('numFormat'),
+  numCustom: $('numCustom'), numFromPage: $('numFromPage'), numStartAt: $('numStartAt'),
+  numSize: $('numSize'), numMargin: $('numMargin'), numSwatches: $('numSwatches'),
+  numRemove: $('numRemove'), numCancel: $('numCancel'), numGo: $('numGo'),
   manualOp: $('btnManualOp'), manualModal: $('manualModal'), manualPoints: $('manualPoints'),
   manualComp: $('manualComp'),
   manualCancel: $('manualCancel'), manualGo: $('manualGo'), manualAuto: $('manualAuto'), manualClear: $('manualClear'),
@@ -109,7 +117,7 @@ const copyBytes = (u8) => u8.slice(); // pdf.js detaches buffers; always hand it
 
 function setDocActionsEnabled(on) {
   [els.save, els.merge, els.split, els.manualOp, els.zoomIn, els.zoomOut, els.gotoPage, els.zoomInput,
-    els.rotL, els.rotR].forEach((b) => { b.disabled = !on; });
+    els.rotL, els.rotR, els.number].forEach((b) => { b.disabled = !on; });
   document.querySelectorAll('.tool').forEach((b) => { b.disabled = !on; });
 }
 
@@ -136,6 +144,14 @@ function pushUndo() {
     manualMarks: state.manualMarks.map(cloneMark),
   });
   if (state.undo.length > 20) state.undo.shift();
+  // Each snapshot holds a full copy of the PDF, so on a big scan 20 of them
+  // can be a gigabyte. Cap the total bytes too, always keeping a few steps.
+  let undoBytes = 0;
+  for (const u of state.undo) undoBytes += u.bytes ? u.bytes.length : 0;
+  while (undoBytes > 384 * 1024 * 1024 && state.undo.length > 3) {
+    const dropped = state.undo.shift();
+    undoBytes -= dropped.bytes ? dropped.bytes.length : 0;
+  }
   els.undo.disabled = state.undo.length === 0;
 }
 async function undo() {
@@ -171,6 +187,7 @@ async function openPdf() {
     state.texts = [];
     state.selectedTextId = null;
     state.editingTextId = null;
+    state.numbering = null;
     state.highlights = [];
     state.inks = [];
     state.manualMarks = [];
@@ -180,20 +197,25 @@ async function openPdf() {
     els.undo.disabled = true;
     state.pageIndex = 0;
     state.scale = 0; // signal: compute fit on first render
+    const renumbered = await restoreNumbering();
     await loadDoc({ rebuildForm: true, fit: true });
     els.emptyState.hidden = true;
     els.stage.hidden = false;
     setDocActionsEnabled(true);
     els.docName.textContent = state.name;
     selectTool('hand');
-    toast('Opened ' + state.name);
+    toast(renumbered
+      ? 'Opened ' + state.name + ' — its page numbering is live again and will follow any change'
+      : 'Opened ' + state.name);
   } catch (e) {
     console.error(e);
     toast('Could not open this PDF: ' + e.message, true);
   } finally { hideBusy(); }
 }
 
-async function loadDoc({ rebuildForm, fit } = {}) {
+// `thumbs` may be an array of page indices: only those thumbnails are redrawn
+// in place (used when an edit is known to touch specific pages — e.g. rotate).
+async function loadDoc({ rebuildForm, fit, thumbs } = {}) {
   if (state.pdfDoc) { try { await state.pdfDoc.destroy(); } catch (e) {} state.pdfDoc = null; }
   const task = pdfjsLib.getDocument({ data: copyBytes(state.bytes) });
   state.pdfDoc = await task.promise;
@@ -201,15 +223,15 @@ async function loadDoc({ rebuildForm, fit } = {}) {
   if (state.pageIndex >= state.pageCount) state.pageIndex = state.pageCount - 1;
   if (state.pageIndex < 0) state.pageIndex = 0;
   if (fit) state.scale = await computeFitScale();
-  await renderThumbs();
+  if (Array.isArray(thumbs)) await refreshThumbBitmaps(thumbs); else await renderThumbs();
   await renderPage();
   if (rebuildForm) await buildForm();
   els.pageCount.textContent = state.pageCount + (state.pageCount === 1 ? ' page' : ' pages');
 }
 
 // Reload after a byte-level edit (keeps zoom; optionally rebuild the form panel)
-async function reloadAfterEdit({ rebuildForm } = {}) {
-  await loadDoc({ rebuildForm, fit: false });
+async function reloadAfterEdit({ rebuildForm, thumbs } = {}) {
+  await loadDoc({ rebuildForm, fit: false, thumbs });
 }
 
 async function computeFitScale() {
@@ -296,17 +318,30 @@ function clearOverlay() {
 }
 
 // ---- Thumbnails -----------------------------------------------------------
+const THUMB_W = 150;
+// Draw one page into a thumbnail-sized canvas.
+async function renderThumbBitmap(i, canvas) {
+  const page = await state.pdfDoc.getPage(i + 1);
+  const base = page.getViewport({ scale: 1 });
+  const vp = page.getViewport({ scale: THUMB_W / base.width });
+  canvas.width = Math.floor(vp.width); canvas.height = Math.floor(vp.height);
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+}
+// Refresh the bitmaps of just these pages, keeping the DOM (and scroll
+// position) alone. Falls back to a full rebuild if the rail is out of step.
+async function refreshThumbBitmaps(indices) {
+  const thumbs = els.thumbs.querySelectorAll('.thumb');
+  if (thumbs.length !== state.pageCount) { await renderThumbs(); return; }
+  await Promise.all(Array.from(new Set(indices))
+    .filter((i) => Number.isInteger(i) && i >= 0 && i < state.pageCount)
+    .map((i) => renderThumbBitmap(i, thumbs[i].querySelector('canvas'))));
+}
 async function renderThumbs() {
   els.thumbs.innerHTML = '';
-  const THUMB_W = 150;
+  const canvases = [];
   for (let i = 0; i < state.pageCount; i++) {
-    const page = await state.pdfDoc.getPage(i + 1);
-    const base = page.getViewport({ scale: 1 });
-    const scale = THUMB_W / base.width;
-    const vp = page.getViewport({ scale });
     const canvas = document.createElement('canvas');
-    canvas.width = Math.floor(vp.width); canvas.height = Math.floor(vp.height);
-    await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+    canvases.push(canvas);
 
     const wrap = document.createElement('div');
     wrap.className = 'thumb' + (i === state.pageIndex ? ' current' : '') +
@@ -358,6 +393,12 @@ async function renderThumbs() {
 
     attachThumbDnD(wrap);
     els.thumbs.appendChild(wrap);
+  }
+  // Bitmaps in parallel batches — one-at-a-time was the whole cost of the
+  // rail on long documents (30 pages = 30 serial pdf.js renders).
+  const BATCH = 4;
+  for (let i = 0; i < canvases.length; i += BATCH) {
+    await Promise.all(canvases.slice(i, i + BATCH).map((cv, k) => renderThumbBitmap(i + k, cv)));
   }
   updateSelBar();
 }
@@ -509,9 +550,13 @@ async function rotatePages(indices, delta) {
   if (!list.length) return;
   showBusy(list.length > 1 ? 'Rotating ' + list.length + ' pages…' : 'Rotating…');
   try {
-    pushUndo(); await bakeAll();
+    pushUndo();
+    // If live overlays got baked they may touch OTHER pages too — only skip
+    // the full thumbnail rebuild when nothing needed baking.
+    const hadOverlays = !!(state.images.length || state.texts.length || state.highlights.length || state.inks.length || state.manualMarks.length);
+    await bakeAll();
     state.bytes = await ops.rotatePages(PDFLib, state.bytes, list, delta);
-    await reloadAfterEdit({});
+    await reloadAfterEdit(hadOverlays ? {} : { thumbs: list });
     if (list.length > 1) toast(list.length + ' pages rotated');
   } catch (e) { toast(e.message, true); } finally { hideBusy(); }
 }
@@ -523,6 +568,113 @@ function pagesToRotate() {
 function rotateCurrent(delta) {
   if (!state.pdfDoc) return;
   rotatePages(pagesToRotate(), delta);
+}
+
+// ---- Page numbering --------------------------------------------------------
+const NUM_COLORS = ['#111111', '#5b6572', '#1d3557', '#d62828', '#2f9e44', '#ffffff'];
+const NUM_DEFAULTS = { format: '{n}', position: 'bottom-center', color: '#111111', startAt: 1, fromPage: 1, size: 11, margin: 28 };
+let numDraftColor = NUM_DEFAULTS.color;
+
+function openNumberModal() {
+  const cfg = state.numbering || NUM_DEFAULTS;
+  const posInput = els.numberModal.querySelector('input[name="numPos"][value="' + cfg.position + '"]')
+    || els.numberModal.querySelector('input[name="numPos"][value="bottom-center"]');
+  if (posInput) posInput.checked = true;
+  const known = Array.from(els.numFormat.options).some((o) => o.value === cfg.format);
+  els.numFormat.value = known ? cfg.format : '__custom';
+  els.numCustom.value = known ? '' : cfg.format;
+  els.numCustom.hidden = known;
+  els.numFromPage.value = String(cfg.fromPage);
+  els.numStartAt.value = String(cfg.startAt);
+  els.numSize.value = String(cfg.size);
+  els.numMargin.value = String(cfg.margin);
+  numDraftColor = cfg.color;
+  renderNumSwatches();
+  els.numRemove.hidden = !state.numbering;
+  els.numGo.textContent = state.numbering ? 'Update numbering' : 'Apply numbering';
+  els.numberModal.hidden = false;
+}
+function renderNumSwatches() {
+  const cur = String(numDraftColor || '').toLowerCase();
+  els.numSwatches.innerHTML = NUM_COLORS.map((c) =>
+    '<span class="swatch' + (cur === c.toLowerCase() ? ' active' : '') + '" data-color="' + c + '" style="background:' + c + '"></span>').join('');
+  els.numSwatches.querySelectorAll('.swatch').forEach((sw) => {
+    sw.addEventListener('click', () => { numDraftColor = sw.dataset.color; renderNumSwatches(); });
+  });
+}
+function readNumberModal() {
+  const posInput = els.numberModal.querySelector('input[name="numPos"]:checked');
+  const pick = els.numFormat.value;
+  const format = pick === '__custom' ? (els.numCustom.value.trim() || '{n}') : pick;
+  const int = (el, dflt, min) => {
+    const v = parseInt(String(el.value).replace(/[^0-9-]/g, ''), 10);
+    return Number.isFinite(v) ? Math.max(min, v) : dflt;
+  };
+  return {
+    format,
+    position: posInput ? posInput.value : 'bottom-center',
+    color: numDraftColor || '#111111',
+    fromPage: Math.min(int(els.numFromPage, 1, 1), state.pageCount || 1),
+    startAt: int(els.numStartAt, 1, -9999),
+    size: Math.min(int(els.numSize, 11, 4), 96),
+    margin: Math.min(int(els.numMargin, 28, 0), 200),
+  };
+}
+function applyNumberModal() {
+  state.numbering = readNumberModal();
+  els.numberModal.hidden = true;
+  renderPage();
+  toast('Pages numbered — the numbers follow any page you add, remove or move');
+}
+function removeNumbering() {
+  state.numbering = null;
+  els.numberModal.hidden = true;
+  renderPage();
+  toast('Numbering removed');
+}
+// The number shown on a given page, or null when that page is not numbered.
+function pageNumberLabel(pageIndex) {
+  const cfg = state.numbering;
+  if (!cfg) return null;
+  const from = Math.max(1, Math.min(state.pageCount, Math.round(cfg.fromPage || 1)));
+  if (pageIndex < from - 1) return null;
+  const n = Math.round(cfg.startAt == null ? 1 : cfg.startAt) + (pageIndex - (from - 1));
+  return ops.formatPageNumber(cfg.format, n, state.pageCount);
+}
+// Live preview of the number on the page being viewed. The canvas is already
+// sized for the page AS DISPLAYED, so a rotated page needs no special case.
+function renderPageNumberPreview() {
+  const layer = els.annLayer; if (!layer) return;
+  const old = layer.querySelector('.pagenum'); if (old) old.remove();
+  const text = pageNumberLabel(state.pageIndex);
+  if (text == null) return;
+  const cfg = state.numbering;
+  const box = document.createElement('div');
+  box.className = 'pagenum';
+  box.dir = 'auto';
+  box.textContent = text;
+  box.style.fontSize = (cfg.size * state.scale) + 'px';
+  box.style.color = cfg.color;
+  const m = cfg.margin * state.scale;
+  const place = String(cfg.position || 'bottom-center');
+  if (place.indexOf('top') === 0) box.style.top = m + 'px'; else box.style.bottom = m + 'px';
+  if (place.indexOf('center') >= 0) { box.style.left = '0'; box.style.right = '0'; box.style.textAlign = 'center'; }
+  else if (place.indexOf('right') >= 0) box.style.right = m + 'px';
+  else box.style.left = m + 'px';
+  layer.appendChild(box);
+}
+
+// Opening a file Paperweight numbered before: lift the numbers back out into
+// the live rule. The page looks identical, but the numbers are governed again
+// rather than frozen — so this cycle (number, save, reopen, add a page, save)
+// can repeat forever without the numbers doubling up or going stale.
+async function restoreNumbering() {
+  let cfg = null;
+  try { cfg = await ops.readNumbering(PDFLib, state.bytes); } catch (e) { return false; }
+  if (!cfg) return false;
+  try { state.bytes = await ops.stripPageNumbers(PDFLib, state.bytes); } catch (e) { return false; }
+  state.numbering = cfg;
+  return true;
 }
 
 // ---- Insert PDFs at a chosen position -------------------------------------
@@ -622,7 +774,7 @@ async function doExtract() {
   els.rangeModal.hidden = true;
   showBusy('Extracting…');
   try {
-    const src = await applyOverlays(state.bytes);
+    const src = await applyOverlays(state.bytes, { numbering: true });
     const nb = await ops.splitPdf(PDFLib, src, idx);
     const suggested = state.name.replace(/\.pdf$/i, '') + '-extract.pdf';
     const saved = await window.api.savePdf(nb, suggested);
@@ -1645,18 +1797,26 @@ function placeTextInput(p) {
   });
 }
 
+// The signature lands as a LIVE object — drag it into place, resize it by the
+// corners, ✕ or Delete to remove — and only bakes into the file on save.
+// (It used to stamp permanently at the click point, so a click that landed a
+// little off could not be corrected without undoing the whole thing.)
 async function placeSignature(p) {
   if (!state.pendingSigPng) { openSigModal(); return; }
   const wpx = 180 * pxPerPoint();                       // 180pt wide as seen on screen
   const hpx = wpx / (state.pendingSigAspect || 3);
   const r = screenRectToPdf(p.x, p.y, wpx, hpx);       // click is the top-left
-  const rect = { page: state.pageIndex, x: r.x, y: r.y, width: r.width, height: r.height, pngBytes: state.pendingSigPng };
-  showBusy('Placing signature…');
-  try {
-    const nb = await ops.stampImages(PDFLib, state.bytes, [rect]);
-    pushUndo(); state.bytes = nb; await reloadAfterEdit({});
-    toast('Signature placed');
-  } catch (e) { toast(e.message, true); } finally { hideBusy(); }
+  pushUndo();
+  const obj = {
+    id: 'img' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    page: state.pageIndex, x: r.x, y: r.y, w: r.width, h: r.height,
+    bytes: state.pendingSigPng, aspect: state.pendingSigAspect || 3,
+  };
+  state.images.push(obj);
+  state.selectedImageId = obj.id; state.selectedTextId = null; state.selectedAnnId = null;
+  selectTool('hand'); // so it can be dragged/resized right away
+  renderImageObjects();
+  toast('Signature placed — drag it into position, corners resize, ✕ removes');
 }
 
 // ---- Insert a picture (JPG/PNG) -------------------------------------------
@@ -2195,7 +2355,11 @@ async function applyTexts(bytes, texts) {
   })), opts);
 }
 // Bake every live overlay (highlights + ink + text + images) into a byte copy.
-async function applyOverlays(bytes) {
+// `numbering` is opt-in because this runs in two very different situations:
+// bakeAll freezes overlays into state.bytes before a page operation (numbers
+// must NOT freeze — they are recomputed), while saving produces the finished
+// copy the reader gets (numbers belong there).
+async function applyOverlays(bytes, { numbering } = {}) {
   let b = bytes;
   if (state.highlights.length) {
     b = await ops.stampHighlights(PDFLib, b, state.highlights.map((h) => (
@@ -2214,7 +2378,19 @@ async function applyOverlays(bytes) {
   }
   b = await applyImages(b, state.images);
   b = await applyTexts(b, state.texts);
+  if (numbering) b = await applyNumbering(b);
   return b;
+}
+// Write the page numbers into a copy of the document. stampPageNumbers clears
+// any numbers it wrote before, so this is safe to run again and again.
+async function applyNumbering(bytes) {
+  if (!state.numbering) return bytes;
+  const needUni = ops.needsUnicodeFont(String(state.numbering.format || ''));
+  const opts = needUni ? { fontkit: window.fontkit, fontBytes: hebFontBytes() } : undefined;
+  if (needUni && (!opts.fontkit || !opts.fontBytes)) {
+    throw new Error('Hebrew text support files failed to load (fontkit / bundled font)');
+  }
+  return ops.stampPageNumbers(PDFLib, bytes, state.numbering, opts);
 }
 async function bakeAll() {
   if (!state.images.length && !state.texts.length && !state.highlights.length && !state.inks.length && !state.manualMarks.length) return;
@@ -2233,6 +2409,7 @@ function addAnnDelete(box, fn) {
 function renderAnnObjects() {
   const layer = els.annLayer; if (!layer) return;
   layer.innerHTML = '';
+  renderPageNumberPreview();
   if (!state.viewport) return;
   const vp = state.viewport;
   const editable = state.tool === 'hand';
@@ -2408,7 +2585,7 @@ let sigBounds = null;
 function initSigPad() {
   sigCtx = els.sigPad.getContext('2d');
   sigCtx.clearRect(0, 0, els.sigPad.width, els.sigPad.height);
-  sigCtx.strokeStyle = '#101418'; sigCtx.lineWidth = 2.4; sigCtx.lineJoin = 'round'; sigCtx.lineCap = 'round';
+  sigCtx.strokeStyle = '#101418'; sigCtx.lineWidth = 4.4; sigCtx.lineJoin = 'round'; sigCtx.lineCap = 'round'; // 2x backing store
   sigHasInk = false; sigBounds = null;
 }
 function sigXY(e) {
@@ -2424,8 +2601,27 @@ function noteBounds(p) {
   }
 }
 function openSigModal() { els.sigModal.hidden = false; initSigPad(); }
-els.sigPad.addEventListener('pointerdown', (e) => { sigDrawing = true; const p = sigXY(e); sigCtx.beginPath(); sigCtx.moveTo(p.x, p.y); noteBounds(p); els.sigPad.setPointerCapture(e.pointerId); });
-els.sigPad.addEventListener('pointermove', (e) => { if (!sigDrawing) return; const p = sigXY(e); sigCtx.lineTo(p.x, p.y); sigCtx.stroke(); sigHasInk = true; noteBounds(p); });
+els.sigPad.addEventListener('pointerdown', (e) => {
+  sigDrawing = true;
+  const p = sigXY(e);
+  sigCtx.beginPath(); sigCtx.moveTo(p.x, p.y);
+  // A tap must leave a dot: the stroke alone draws nothing until the pointer
+  // moves, which lost i-dots, geresh marks and short taps entirely.
+  sigCtx.lineTo(p.x + 0.01, p.y + 0.01); sigCtx.stroke();
+  sigHasInk = true;
+  noteBounds(p);
+  els.sigPad.setPointerCapture(e.pointerId);
+});
+els.sigPad.addEventListener('pointermove', (e) => {
+  if (!sigDrawing) return;
+  // Coalesced points keep a fast signature smooth instead of jagged — the
+  // browser buffers several real positions inside one pointermove event.
+  const raw = (typeof e.getCoalescedEvents === 'function') ? e.getCoalescedEvents() : [];
+  const moves = raw.length ? raw.map(sigXY) : [sigXY(e)];
+  for (const p of moves) { sigCtx.lineTo(p.x, p.y); noteBounds(p); }
+  sigCtx.stroke();
+  sigHasInk = true;
+});
 els.sigPad.addEventListener('pointerup', () => { sigDrawing = false; });
 els.sigClear.addEventListener('click', initSigPad);
 els.sigCancel.addEventListener('click', () => { els.sigModal.hidden = true; });
@@ -2461,7 +2657,7 @@ async function savePdf() {
   const suggested = state.name.replace(/\.pdf$/i, '') + '-edited.pdf';
   showBusy('Saving…');
   try {
-    const out = await applyOverlays(state.bytes);
+    const out = await applyOverlays(state.bytes, { numbering: true });
     const saved = await window.api.savePdf(out, suggested);
     if (saved) toast('Saved ' + saved.split(/[\\/]/).pop());
   } catch (e) { toast(e.message, true); } finally { hideBusy(); }
@@ -2488,6 +2684,14 @@ els.rangeGo.addEventListener('click', doExtract);
 els.rangeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doExtract(); });
 els.insertCancel.addEventListener('click', () => { els.insertModal.hidden = true; });
 els.insertGo.addEventListener('click', doInsert);
+els.number.addEventListener('click', openNumberModal);
+els.numCancel.addEventListener('click', () => { els.numberModal.hidden = true; });
+els.numGo.addEventListener('click', applyNumberModal);
+els.numRemove.addEventListener('click', removeNumbering);
+els.numFormat.addEventListener('change', () => {
+  els.numCustom.hidden = els.numFormat.value !== '__custom';
+  if (!els.numCustom.hidden) els.numCustom.focus();
+});
 els.manualOp.addEventListener('click', openManualModal);
 els.manualCancel.addEventListener('click', () => { els.manualModal.hidden = true; });
 els.manualGo.addEventListener('click', doManualOps);
@@ -2650,6 +2854,8 @@ async function dropPdfs(files) {
       state.undo = [];
       state.images = []; state.texts = []; state.highlights = []; state.inks = []; state.manualMarks = [];
       state.selectedImageId = null; state.selectedTextId = null; state.selectedAnnId = null;
+      state.editingTextId = null;
+      state.numbering = null;
       state.selectedPages.clear();
       els.undo.disabled = true;
       state.pageIndex = 0;
@@ -2657,6 +2863,7 @@ async function dropPdfs(files) {
       if (list.length > 1) {
         state.bytes = await ops.insertPdfsAt(PDFLib, state.bytes, list.slice(1).map((x) => x.data), Infinity);
       }
+      await restoreNumbering(); // a dropped file gets its rule back, like Open does
       await loadDoc({ rebuildForm: true, fit: true });
       els.emptyState.hidden = true;
       els.stage.hidden = false;
@@ -2693,6 +2900,7 @@ async function openImagesAsDoc(files) {
     state.images = []; state.texts = []; state.highlights = []; state.inks = []; state.manualMarks = [];
     state.selectedImageId = null; state.selectedTextId = null; state.selectedAnnId = null;
     state.editingTextId = null;
+    state.numbering = null;
     state.selectedPages.clear();
     els.undo.disabled = true;
     state.pageIndex = 0;

@@ -41,11 +41,14 @@
   // ---- Merge: concatenate several PDFs in the given order --------------------
   async function mergePdfs(PDFLib, listOfBytes) {
     const out = await PDFLib.PDFDocument.create();
+    let first = null;
     for (const bytes of listOfBytes) {
       const src = await load(PDFLib, await normalizeToPdf(PDFLib, bytes));
+      if (!first) first = src;
       const pages = await out.copyPages(src, src.getPageIndices());
       pages.forEach((p) => out.addPage(p));
     }
+    if (first) carryNumbering(PDFLib, first, out); // the first file sets the rule
     return out.save();
   }
 
@@ -93,6 +96,7 @@
     const out = await PDFLib.PDFDocument.create();
     const copied = await out.copyPages(src, orderIndices);
     copied.forEach((p) => out.addPage(p));
+    carryNumbering(PDFLib, src, out);
     return out.save();
   }
 
@@ -133,6 +137,221 @@
   }
   function rotatePage(PDFLib, bytes, pageIndex, deltaDegrees) {
     return rotatePages(PDFLib, bytes, [pageIndex], deltaDegrees);
+  }
+
+  // ---- Page numbering -------------------------------------------------------
+  // Numbering is a RULE, not a set of marks. Every number Paperweight draws goes
+  // into its own content stream tagged PW_NUM_TAG, and the rule itself is kept in
+  // the catalog under PW_NUM_CFG. That makes stampPageNumbers idempotent: it
+  // always clears its own previous numbers first, so it can be re-run after any
+  // page is added, deleted, moved or rotated without the numbers piling up — and
+  // re-opening a numbered file restores the rule instead of freezing it.
+  const PW_NUM_TAG = 'PWPageNumber';
+  const PW_NUM_CFG = 'PWNumbering';
+
+  function formatPageNumber(fmt, n, total) {
+    return String(fmt == null ? '{n}' : fmt)
+      .replace(/\{n\}/g, String(n))
+      .replace(/\{total\}/g, String(total));
+  }
+
+  // Drop every page-number stream we previously added. Returns how many went.
+  function dropNumberStreams(PDFLib, doc) {
+    const Contents = PDFLib.PDFName.of('Contents');
+    const Tag = PDFLib.PDFName.of(PW_NUM_TAG);
+    const isOurs = (ref) => {
+      const st = doc.context.lookup(ref);
+      return !!(st && st.dict && st.dict.get(Tag));
+    };
+    dropNumberFonts(PDFLib, doc);
+    let removed = 0;
+    for (const page of doc.getPages()) {
+      const contents = page.node.get(Contents);
+      if (!contents) continue;
+      if (typeof contents.size !== 'function') {     // a lone stream, not an array
+        if (isOurs(contents)) { doc.context.delete(contents); page.node.delete(Contents); removed++; }
+        continue;
+      }
+      const keep = [];
+      for (let i = 0; i < contents.size(); i++) {
+        const ref = contents.get(i);
+        if (isOurs(ref)) { doc.context.delete(ref); removed++; continue; }
+        keep.push(ref);
+      }
+      if (keep.length !== contents.size()) page.node.set(Contents, doc.context.obj(keep));
+    }
+    return removed;
+  }
+
+  // Fonts embedded by a previous numbering pass. pdf-lib only materialises a
+  // font's objects at save time, so they cannot be tagged in place — instead we
+  // record their object numbers in the rule and collect them on the next run.
+  // Without this, every re-number would strand another font subset in the file.
+  function dropNumberFonts(PDFLib, doc) {
+    const cfgDict = doc.catalog.get(PDFLib.PDFName.of(PW_NUM_CFG));
+    if (!cfgDict || typeof cfgDict.get !== 'function') return;
+    const list = cfgDict.get(PDFLib.PDFName.of('Fonts'));
+    if (!list || typeof list.size !== 'function') return;
+    const refs = [];
+    for (let i = 0; i < list.size(); i++) {
+      const n = list.get(i);
+      if (n && typeof n.asNumber === 'function') refs.push(PDFLib.PDFRef.of(n.asNumber(), 0));
+    }
+    if (!refs.length) return;
+    const del = (ref) => { if (ref && ref.objectNumber != null) doc.context.delete(ref); };
+    const name = (k) => PDFLib.PDFName.of(k);
+    // Walk font -> descendants -> descriptor -> embedded file, deleting as we go.
+    const killFont = (ref) => {
+      const dict = doc.context.lookup(ref);
+      if (dict && typeof dict.get === 'function') {
+        const kids = doc.context.lookup(dict.get(name('DescendantFonts')));
+        if (kids && typeof kids.size === 'function') {
+          for (let i = 0; i < kids.size(); i++) killFont(kids.get(i));
+        }
+        const descRef = dict.get(name('FontDescriptor'));
+        const desc = doc.context.lookup(descRef);
+        if (desc && typeof desc.get === 'function') {
+          for (const f of ['FontFile', 'FontFile2', 'FontFile3']) del(desc.get(name(f)));
+        }
+        del(descRef);
+        del(dict.get(name('ToUnicode')));
+        del(dict.get(name('DescendantFonts')));
+      }
+      del(ref);
+    };
+    refs.forEach(killFont);
+    // Drop the now-dangling names from every page's font resources.
+    const gone = new Set(refs.map((r) => r.objectNumber));
+    for (const page of doc.getPages()) {
+      const res = page.node.get(name('Resources'));
+      if (!res || typeof res.get !== 'function') continue;
+      const fonts = res.get(name('Font'));
+      if (!fonts || typeof fonts.keys !== 'function') continue;
+      for (const key of fonts.keys()) {
+        const ref = fonts.get(key);
+        if (ref && gone.has(ref.objectNumber)) fonts.delete(key);
+      }
+    }
+  }
+  // Where the number sits, in the page as the READER sees it — so a rotated page
+  // still gets its number along the visible bottom edge, the right way up.
+  function numberAnchor(page, spin, pos, margin, size, textWidth) {
+    const { width: W, height: H } = page.getSize();
+    const quarter = spin === 90 || spin === 270;
+    const dw = quarter ? H : W, dh = quarter ? W : H;
+    const place = String(pos || 'bottom-center');
+    let dx = margin;
+    if (place.indexOf('center') >= 0) dx = (dw - textWidth) / 2;
+    else if (place.indexOf('right') >= 0) dx = dw - margin - textWidth;
+    const dy = place.indexOf('top') === 0 ? margin : dh - margin - size;
+    // display (origin top-left, y down) -> user space (origin bottom-left, y up)
+    if (spin === 90) return { x: dy, y: dx };
+    if (spin === 180) return { x: W - dx, y: dy };
+    if (spin === 270) return { x: W - dy, y: H - dx };
+    return { x: dx, y: H - dy };
+  }
+
+  function readNumberingFromDoc(PDFLib, doc) {
+    const d = doc.catalog.get(PDFLib.PDFName.of(PW_NUM_CFG));
+    if (!d || typeof d.get !== 'function') return null;
+    const text = (k, dflt) => {
+      const v = d.get(PDFLib.PDFName.of(k));
+      return v && typeof v.decodeText === 'function' ? v.decodeText() : dflt;
+    };
+    const num = (k, dflt) => {
+      const v = d.get(PDFLib.PDFName.of(k));
+      return v && typeof v.asNumber === 'function' ? v.asNumber() : dflt;
+    };
+    return {
+      format: text('Format', '{n}'),
+      position: text('Position', 'bottom-center'),
+      color: text('Color', '#111111'),
+      startAt: num('StartAt', 1),
+      fromPage: num('FromPage', 1),
+      size: num('Size', 11),
+      margin: num('Margin', 28),
+    };
+  }
+  function writeNumberingToDoc(PDFLib, doc, cfg, fontRefs) {
+    const hex = (v) => PDFLib.PDFHexString.fromText(String(v));
+    doc.catalog.set(PDFLib.PDFName.of(PW_NUM_CFG), doc.context.obj({
+      Format: hex(cfg.format == null ? '{n}' : cfg.format),
+      Position: hex(cfg.position || 'bottom-center'),
+      Color: hex(cfg.color || '#111111'),
+      StartAt: PDFLib.PDFNumber.of(cfg.startAt || 1),
+      FromPage: PDFLib.PDFNumber.of(cfg.fromPage || 1),
+      Size: PDFLib.PDFNumber.of(cfg.size || 11),
+      Margin: PDFLib.PDFNumber.of(cfg.margin == null ? 28 : cfg.margin),
+      Fonts: (fontRefs || []).map((n) => PDFLib.PDFNumber.of(n)),
+    }));
+  }
+
+  // Rebuilding a document (insert / reorder / delete) copies pages into a fresh
+  // one, which would leave the numbers behind with no rule to govern them. Carry
+  // the rule over so they stay manageable. The recorded font object numbers are
+  // dropped: they refer to the OLD document, and following them into the new one
+  // would delete whatever now happens to sit at those numbers.
+  function carryNumbering(PDFLib, srcDoc, outDoc) {
+    const cfg = readNumberingFromDoc(PDFLib, srcDoc);
+    if (cfg) writeNumberingToDoc(PDFLib, outDoc, cfg, []);
+  }
+
+  // Read back the numbering rule stored in a PDF (null when there is none).
+  async function readNumbering(PDFLib, bytes) {
+    return readNumberingFromDoc(PDFLib, await load(PDFLib, bytes));
+  }
+  // Remove our page numbers and forget the rule.
+  async function stripPageNumbers(PDFLib, bytes) {
+    const doc = await load(PDFLib, bytes);
+    dropNumberStreams(PDFLib, doc);
+    doc.catalog.delete(PDFLib.PDFName.of(PW_NUM_CFG));
+    return doc.save();
+  }
+
+  // cfg: { format, position, color, startAt, fromPage, size, margin }
+  // opts: { fontkit, fontBytes } — needed when the format has non-WinAnsi text.
+  async function stampPageNumbers(PDFLib, bytes, cfg, opts) {
+    const doc = await load(PDFLib, bytes);
+    dropNumberStreams(PDFLib, doc); // never stack a second set on top of the first
+    if (!cfg) {
+      doc.catalog.delete(PDFLib.PDFName.of(PW_NUM_CFG));
+      return doc.save();
+    }
+    const total = doc.getPageCount();
+    const size = cfg.size || 11;
+    const margin = cfg.margin == null ? 28 : cfg.margin;
+    const from = Math.max(1, Math.min(total, Math.round(cfg.fromPage || 1)));
+    const start = Math.round(cfg.startAt == null ? 1 : cfg.startAt);
+    const color = rgb(PDFLib, cfg.color || '#111111');
+
+    const labels = [];
+    for (let i = from - 1; i < total; i++) {
+      labels.push({ i, text: formatPageNumber(cfg.format, start + (i - (from - 1)), total) });
+    }
+    let uniFont = null;
+    if (labels.some((l) => needsUnicodeFont(l.text))) {
+      if (!opts || !opts.fontkit || !opts.fontBytes) {
+        throw new Error('This numbering format needs the bundled Unicode font (Hebrew or other non-Latin characters), but it was not provided');
+      }
+      doc.registerFontkit(opts.fontkit);
+      uniFont = await doc.embedFont(opts.fontBytes, { subset: true });
+    }
+    const helv = await doc.embedFont(PDFLib.StandardFonts.Helvetica);
+
+    const Tag = PDFLib.PDFName.of(PW_NUM_TAG);
+    for (const label of labels) {
+      const page = doc.getPage(label.i);
+      const font = needsUnicodeFont(label.text) ? uniFont : helv;
+      const spin = pageSpin(page);
+      const at = numberAnchor(page, spin, cfg.position, margin, size, measure(font, label.text, size));
+      drawTextBlock(PDFLib, page, { x: at.x, y: at.y - size, text: label.text, rot: spin }, size, font, color, null);
+      // Tag the stream pdf-lib just wrote, so a later run can find and drop it.
+      if (page.contentStream && page.contentStream.dict) page.contentStream.dict.set(Tag, PDFLib.PDFBool.True);
+    }
+    // Remember which fonts this pass embedded, so the next one can collect them.
+    const fontRefs = [uniFont, helv].filter(Boolean).map((f) => f.ref.objectNumber);
+    writeNumberingToDoc(PDFLib, doc, cfg, fontRefs);
+    return doc.save();
   }
 
   // ---- Forms ----------------------------------------------------------------
@@ -503,6 +722,7 @@
       (await out.copyPages(src, src.getPageIndices())).forEach((p) => out.addPage(p));
     }
     (await out.copyPages(base, after)).forEach((p) => out.addPage(p));
+    carryNumbering(PDFLib, base, out);
     return out.save();
   }
 
@@ -666,6 +886,10 @@
     deletePages,
     rotatePage,
     rotatePages,
+    stampPageNumbers,
+    stripPageNumbers,
+    readNumbering,
+    formatPageNumber,
     getFormFields,
     fillForm,
     stampText,

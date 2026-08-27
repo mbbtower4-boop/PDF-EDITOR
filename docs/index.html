@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob: data:; font-src 'self';" />
-  <meta name="app-version" content="1.23.0" />
+  <meta name="app-version" content="1.25.0" />
   <meta name="theme-color" content="#12151b" />
   <title>Paperweight — online PDF editor</title>
   <link rel="icon" href="assets/paperweight.ico" />
@@ -72,6 +72,10 @@
       <button id="btnMerge" class="tbtn ghost" title="Insert other PDFs — or PNG/JPG images as pages — at a chosen position" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5"/><path d="M12 18v-6"/><path d="M9 15h6"/></svg>
         Insert PDF
+      </button>
+      <button id="btnNumber" class="tbtn ghost" title="Number the pages — the numbering updates itself whenever pages change" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 17h6"/><path d="M12 17v-3"/><path d="M10.5 14.5L12 13.6l1.5.9"/></svg>
+        Numbering
       </button>
       <button id="btnSplit" class="tbtn ghost" title="Export a page range" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8 8l12 8"/><path d="M8 16l12-8"/></svg>
@@ -187,11 +191,12 @@
             <li><b>Copying text boxes</b> — select one and press <b>Ctrl+C</b>, then <b>Ctrl+V</b> pastes an identical box (words, colour, size, angle — everything) on this page <b>or any other page</b>. <b>Ctrl+D</b> or the <b>⧉ Copy</b> button drops a copy right next to the original.</li>
             <li><b>Styling text</b> — select it with the <b>Hand</b> tool and the top bar gives you colour, size, <b>bold</b>, <i>italic</i>, alignment, <b>rotation</b>, line spacing and fade. Drag the round handle above the box to spin it (hold <b>Shift</b> to snap to 15°). <b>Corners</b> resize the whole box; the <b>mid-edge handles stretch one direction only</b> — sides for width, top/bottom for height.</li>
             <li><b>Image</b> — <b>drag an image file straight onto the page</b>, or use the Image tool and drag a box. With the <b>Hand</b> tool, drag to move or use the corners to resize.</li>
-            <li><b>Sign</b> — draw a signature once, then click on the page to place it.</li>
+            <li><b>Sign</b> — draw a signature once (a tap leaves a dot, so dotted letters work), then click the page to place it. It lands as a live object: <b>drag it into position, corners resize, ✕ or Delete removes it</b> — it is only written into the file when you save. “Draw new signature” in the top bar replaces it.</li>
             <li><b>Move around</b> — drag the page with the <b>Hand</b> tool, or hold the <b>right mouse button</b> with any tool. <b>Ctrl + wheel</b> zooms.</li>
             <li><b>Pages</b> — drag thumbnails to reorder, or use a thumbnail's <b>⇅</b> to jump it to any page number. Each has <b>↺ ↻ rotate</b> (90° left/right) and delete; the toolbar's <b>↺ ↻</b> turn the page you are viewing — or every selected page — and <b>[</b> / <b>]</b> do the same from the keyboard. Rotation is saved into the file. <b>Ctrl+click</b> (or Shift+click) thumbnails to select several pages, then move them together (drag or "Move…") or delete them in one go.</li>
             <li><b>Insert PDF</b> adds other PDFs at the beginning, end, or after a chosen page — you can pick <b>several files at once</b> in the dialog, or simply <b>drop PDF files onto the window</b> to append them. <b>PNG/JPG images are welcome too</b>: each becomes a full A4 page. Dropping images with <b>no document open</b> builds a brand-new PDF out of them.</li>
             <li><b>Extract</b> saves a page range to a new file.</li>
+            <li><b>Numbering</b> puts page numbers on the document — choose the corner, the style (<b>1</b>, <b>1 / 12</b>, <b>Page 1 of 12</b>, <b>עמוד 1 מתוך 12</b>, or your own), where counting starts, size and colour. It is stored as a <b>rule</b>, so if you add, delete, move or rotate a page the numbers correct themselves; re-opening a file numbered here brings the rule back rather than leaving stale numbers behind. Numbers you can see on screen are written into the file when you save.</li>
           </ul>
           <h3>Private by design</h3>
           <p class="small muted">Your PDFs are opened, edited, and saved entirely in this browser — nothing is ever uploaded. This tool <b>adds</b> text as overlays; it does not rewrite text already inside the PDF. "Sign" places a visible signature image, not a cryptographic digital signature.</p>
@@ -213,7 +218,7 @@
   <div id="sigModal" class="modal" hidden>
     <div class="modal-card">
       <h2>Draw your signature</h2>
-      <canvas id="sigPad" class="sig-pad" width="520" height="200"></canvas>
+      <canvas id="sigPad" class="sig-pad" width="1040" height="400"></canvas>
       <div class="modal-actions">
         <button id="sigClear" class="tbtn">Clear</button>
         <span class="spacer"></span>
@@ -259,6 +264,77 @@
   </div>
 
   <!-- Insert PDF position modal --------------------------------------- -->
+  <!-- Page numbering ---------------------------------------------------- -->
+  <div id="numberModal" class="modal" hidden>
+    <div class="modal-card">
+      <h2>Number the pages</h2>
+      <p class="small muted">Numbering is a <b>rule</b>, not stamped-on marks: it is written when you save, and it re-numbers itself whenever you add, delete, move or rotate a page. Re-open a file numbered here and the rule comes back with it, so the numbers never double up.</p>
+
+      <div class="num-grid">
+        <div class="num-field">
+          <span class="num-label">Where on the page</span>
+          <div class="pos-grid">
+          <label class="pos-cell"><input type="radio" name="numPos" value="top-left" /><span>↖</span></label>
+          <label class="pos-cell"><input type="radio" name="numPos" value="top-center" /><span>↑</span></label>
+          <label class="pos-cell"><input type="radio" name="numPos" value="top-right" /><span>↗</span></label>
+          <label class="pos-cell"><input type="radio" name="numPos" value="bottom-left" /><span>↙</span></label>
+          <label class="pos-cell"><input type="radio" name="numPos" value="bottom-center" checked /><span>↓</span></label>
+          <label class="pos-cell"><input type="radio" name="numPos" value="bottom-right" /><span>↘</span></label>
+          </div>
+        </div>
+
+        <div class="num-field">
+          <span class="num-label">Style</span>
+          <select id="numFormat" class="num-select">
+            <option value="{n}">1</option>
+            <option value="- {n} -">- 1 -</option>
+            <option value="{n} / {total}">1 / 12</option>
+            <option value="Page {n}">Page 1</option>
+            <option value="Page {n} of {total}">Page 1 of 12</option>
+            <option value="עמוד {n}">עמוד 1</option>
+            <option value="עמוד {n} מתוך {total}">עמוד 1 מתוך 12</option>
+            <option value="__custom">Custom…</option>
+          </select>
+          <input id="numCustom" class="text-input" type="text" placeholder="Use {n} and {total}" hidden />
+        </div>
+
+        <div class="num-field">
+          <span class="num-label">Start numbering at page</span>
+          <input id="numFromPage" class="num-input" type="text" inputmode="numeric" value="1" />
+          <span class="small muted">Leave a cover page unnumbered by setting this to 2.</span>
+        </div>
+
+        <div class="num-field">
+          <span class="num-label">First number shown</span>
+          <input id="numStartAt" class="num-input" type="text" inputmode="numeric" value="1" />
+          <span class="small muted">Set this to 1 to start counting at the first numbered page.</span>
+        </div>
+
+        <div class="num-field">
+          <span class="num-label">Size</span>
+          <input id="numSize" class="num-input" type="text" inputmode="numeric" value="11" />
+        </div>
+
+        <div class="num-field">
+          <span class="num-label">Distance from the edge</span>
+          <input id="numMargin" class="num-input" type="text" inputmode="numeric" value="28" />
+        </div>
+
+        <div class="num-field num-field-wide">
+          <span class="num-label">Colour</span>
+          <div class="swatches" id="numSwatches"></div>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button id="numRemove" class="tbtn danger" hidden>Remove numbering</button>
+        <span class="spacer"></span>
+        <button id="numCancel" class="tbtn">Cancel</button>
+        <button id="numGo" class="tbtn primary">Apply numbering</button>
+      </div>
+    </div>
+  </div>
+
   <div id="insertModal" class="modal" hidden>
     <div class="modal-card">
       <h2>Insert PDF pages</h2>

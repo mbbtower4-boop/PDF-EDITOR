@@ -282,6 +282,55 @@ async function pageCount(bytes) {
   );
   check('stampText rotates a multi-line Hebrew block', (await pageCount(heBlock)) === 3);
 
+  // ---- Page numbering -------------------------------------------------------
+  check('formatPageNumber fills n and total', ops.formatPageNumber('Page {n} of {total}', 3, 12) === 'Page 3 of 12');
+  check('formatPageNumber defaults to the bare number', ops.formatPageNumber(null, 5, 9) === '5');
+
+  const numCfg = { format: '{n} / {total}', position: 'bottom-center', color: '#111111', startAt: 1, fromPage: 1, size: 11, margin: 28 };
+  const numbered = await ops.stampPageNumbers(PDFLib, a, numCfg);
+  check('stampPageNumbers keeps the page count', (await pageCount(numbered)) === 3);
+  const readBack = await ops.readNumbering(PDFLib, numbered);
+  check('the rule is stored in the file', readBack && readBack.format === '{n} / {total}' && readBack.position === 'bottom-center');
+  check('the rule keeps its numbers', readBack.startAt === 1 && readBack.size === 11 && readBack.margin === 28);
+  check('a plain pdf has no rule', (await ops.readNumbering(PDFLib, a)) === null);
+
+  // Re-numbering must REPLACE, never stack — this is what makes it safe to run
+  // again after every page change.
+  const twice = await ops.stampPageNumbers(PDFLib, numbered, numCfg);
+  const thrice = await ops.stampPageNumbers(PDFLib, twice, numCfg);
+  check('re-numbering does not stack pages', (await pageCount(thrice)) === 3);
+  check('re-numbering does not balloon the file', thrice.length < numbered.length * 1.5);
+
+  // Numbering survives a page being inserted, and follows the new page list.
+  const grown = await ops.insertPdfsAt(PDFLib, numbered, [b], 1);
+  const rule = await ops.readNumbering(PDFLib, grown);
+  check('the rule survives an insert', rule && rule.format === '{n} / {total}');
+  const renumbered = await ops.stampPageNumbers(PDFLib, grown, rule);
+  check('renumbering the grown document works', (await pageCount(renumbered)) === 5);
+
+  // Stripping leaves a clean file with no rule left behind.
+  const cleaned = await ops.stripPageNumbers(PDFLib, renumbered);
+  check('stripPageNumbers clears the rule', (await ops.readNumbering(PDFLib, cleaned)) === null);
+  check('stripPageNumbers keeps every page', (await pageCount(cleaned)) === 5);
+
+  // A cover page can be skipped, and Hebrew formats need the bundled font.
+  const skipCover = await ops.stampPageNumbers(PDFLib, a, Object.assign({}, numCfg, { fromPage: 2, startAt: 1 }));
+  check('numbering can start after a cover page', (await pageCount(skipCover)) === 3);
+  let numThrew = false;
+  try { await ops.stampPageNumbers(PDFLib, a, Object.assign({}, numCfg, { format: 'עמוד {n}' })); }
+  catch (e) { numThrew = /Unicode font/i.test(e.message); }
+  check('Hebrew numbering without a font is refused', numThrew);
+  const heNum = await ops.stampPageNumbers(PDFLib, a, Object.assign({}, numCfg, { format: 'עמוד {n} מתוך {total}' }), { fontkit, fontBytes });
+  check('Hebrew numbering embeds and stamps', (await pageCount(heNum)) === 3);
+  const heRule = await ops.readNumbering(PDFLib, heNum);
+  check('a Hebrew rule round-trips intact', heRule.format === 'עמוד {n} מתוך {total}');
+
+  // A numbered page that is also turned still gets its number the right way up
+  // (position is computed in the page as the reader sees it).
+  const turnedNum = await ops.stampPageNumbers(PDFLib, await ops.rotatePages(PDFLib, a, [0], 90), numCfg);
+  check('numbering works on a rotated page', (await pageCount(turnedNum)) === 3);
+  check('numbering leaves the rotation alone', (await ops.getPageSizes(PDFLib, turnedNum))[0].rotation === 90);
+
   // ---- DOCX (Word) export ---------------------------------------------------
   const docx = ops.buildDocx([
     { text: 'Hello World', rtl: false },
